@@ -1,3 +1,16 @@
+# Disabled on this fork.
+#
+# Upstream's release flow computes the next semver via
+# `reecetech/version-increment` (conventional_commits scheme) and tags + drafts
+# a release. That scheme conflicts with this fork's `<upstream-base>-custom.<n>`
+# versioning (see CLAUDE.md), and the workflow requires `secrets.PAT_TOKEN`
+# which the fork does not provide.
+#
+# Trigger was already `workflow_dispatch` only upstream — left as-is so it
+# doesn't fire automatically. The body is preserved verbatim for reference;
+# the fork should cut releases manually (or via a fork-specific workflow added
+# later) until a proper release pipeline lands.
+
 name: Tag and Release
 
 on:
@@ -5,6 +18,9 @@ on:
 
 jobs:
   build:
+    # Guard: disabled on this fork pending a versioning scheme that matches
+    # CLAUDE.md's `<upstream-base>-custom.<n>` convention.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

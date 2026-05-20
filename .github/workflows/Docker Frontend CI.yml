@@ -1,12 +1,16 @@
+# Disabled on this fork. See `Docker Backend CI.yml` for the rationale —
+# same constraints apply: upstream's namespace, missing secrets, semver-scheme
+# mismatch. Replace rather than re-enable when a fork-flavored image pipeline
+# is needed.
+
 name: Docker Frontend CI
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
   docker:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

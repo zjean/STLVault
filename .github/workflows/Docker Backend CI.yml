@@ -1,12 +1,26 @@
+# Disabled on this fork.
+#
+# Upstream's pipeline publishes the backend image to
+# `moddroid94/stlvault-backend` on DockerHub on every published release.
+# The fork has no write access to that namespace, no `DOCKERHUB_TOKEN` secret,
+# and no fork-specific publish target wired up yet. The version is also
+# derived from `reecetech/version-increment` (conventional_commits), which
+# conflicts with this fork's `<upstream-base>-custom.<n>` scheme (see
+# CLAUDE.md).
+#
+# Trigger reduced to `workflow_dispatch` only and the job is gated with
+# `if: false` to prevent accidental publication to upstream's namespace. When
+# a fork-flavored image pipeline is needed (e.g. `ghcr.io/zjean/stlvault-backend`),
+# replace this file rather than re-enabling it in place.
+
 name: Docker Backend CI
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
   docker:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
