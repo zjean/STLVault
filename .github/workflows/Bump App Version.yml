@@ -1,16 +1,18 @@
+# Disabled on this fork.
+#
+# Upstream auto-bumps frontend/package.json on every PR merge via
+# `reecetech/version-increment` (conventional_commits scheme). That scheme
+# produces plain `<major>.<minor>.<patch>` versions, which conflicts with this
+# fork's `<upstream-base>-custom.<n>` versioning (see CLAUDE.md). It also
+# requires `secrets.PAT_TOKEN`, which the fork does not provide.
+#
+# Trigger reduced to `workflow_dispatch` only so it doesn't fire on PR merges
+# (the original failure mode that produced a red X on every fork PR). Body
+# preserved verbatim for reference / future adaptation.
+
 name: Bump App Semver
 
 on:
-  push:
-    branches:
-      - "main"
-    paths-ignore:
-      - "frontend/package.json"
-  pull_request:
-    types:
-      - closed
-    branches:
-      - "main"
   workflow_dispatch:
 
 jobs:
