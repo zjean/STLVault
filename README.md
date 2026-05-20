@@ -56,6 +56,13 @@ The recommended way to deploy STLVault is using **Docker Compose** or via a cont
 
 ## Docker Compose with Images
 
+Upstream publishes images to Docker Hub under `moddroid94/stlvault-*`. This fork additionally publishes its own images to GitHub Container Registry on every push to `main`:
+
+- `ghcr.io/zjean/stlvault-backend:latest` (also tagged `sha-<short>` per build)
+- `ghcr.io/zjean/stlvault-frontend:latest` (also tagged `sha-<short>` per build)
+
+To use the fork's images, substitute the `image:` lines below with the `ghcr.io/zjean/...` equivalents — everything else (ports, env vars, volumes) stays the same.
+
 ```
 services:
   stlvbackend:
