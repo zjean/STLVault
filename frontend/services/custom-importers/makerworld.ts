@@ -1,9 +1,27 @@
-// Typed client for /api/makerworld/{options,importid} (fork-only).
+// Typed client for /api/makerworld/{options,importid,liked} (fork-only).
 // Mirrors the shape of api.retrieveModelOptions / api.importModelFromId
 // so the URL-import flow can dispatch by hostname without changing the
 // callers' signatures.
 
 import { STLModel, STLModelCollection } from "../../types";
+
+export interface LikedDesign {
+  designId: number;
+  modelId: string;
+  title: string;
+  slug: string;
+  coverUrl: string;
+  creatorHandle: string;
+  isPrintable: boolean;
+  nsfw: boolean;
+  webUrl: string;
+}
+
+export interface LikedListResponse {
+  hits: LikedDesign[];
+  total: number;
+  hiddenCnt: number;
+}
 
 const apiBase = (): string => {
   const override = localStorage.getItem("api-port-override");
@@ -26,6 +44,24 @@ const isAuthExpired = (data: unknown): boolean => {
 };
 
 export const makerworldApi = {
+  async listLiked(limit = 24, offset = 0): Promise<LikedListResponse> {
+    const res = await fetch(
+      `${apiBase()}/makerworld/liked?limit=${limit}&offset=${offset}`,
+    );
+    if (res.status === 401) {
+      const data = await res.json().catch(() => null);
+      if (isAuthExpired(data)) throw new MakerworldAuthExpiredError();
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(
+        (data as { detail?: string })?.detail ||
+          `Makerworld /liked HTTP ${res.status}`,
+      );
+    }
+    return res.json();
+  },
+
   async retrieveModelOptions(url: string): Promise<STLModelCollection[]> {
     const res = await fetch(`${apiBase()}/makerworld/options`, {
       method: "POST",

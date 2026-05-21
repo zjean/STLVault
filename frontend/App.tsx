@@ -11,7 +11,9 @@ import {
   retrieveModelOptionsByHost,
   importModelFromIdByHost,
   MakerworldAuthExpiredError,
+  LikedDesign,
 } from "./services/custom-importers";
+import MakerworldLikedModal from "./components/custom-importers/MakerworldLikedModal";
 import {
   FolderInput,
   Tags,
@@ -79,6 +81,7 @@ const App = () => {
   const [importUrl, setImportUrl] = useState("");
   const [importFolderId, setImportFolderId] = useState("");
   const [bambuAuthExpired, setBambuAuthExpired] = useState(false);
+  const [showLikedModal, setShowLikedModal] = useState(false);
   const port = import.meta.env.VITE_API_URL;
   // Delete Confirmation State
   const [deleteConfirmState, setDeleteConfirmState] = useState<{
@@ -311,6 +314,67 @@ const App = () => {
       currentFolderId !== "all" ? currentFolderId : folders[0]?.id || "",
     );
     setShowImportModal(true);
+  };
+
+  const handleOpenLiked = () => {
+    setBambuAuthExpired(false);
+    setShowLikedModal(true);
+  };
+
+  // Per-design: fetch its instances and import them all. The webUrl
+  // doubles as the sourceUrl on each created model row — the existing
+  // host-based dispatch in importModelFromIdByHost handles routing to
+  // the Makerworld importer and threading the source URL through.
+  const handleLikedImport = async (
+    picked: LikedDesign[],
+    folderId: string,
+  ) => {
+    if (picked.length === 0 || !folderId) return;
+    setIsLoading(true);
+    setBambuAuthExpired(false);
+    try {
+      for (const design of picked) {
+        let instances;
+        try {
+          instances = await retrieveModelOptionsByHost(design.webUrl);
+        } catch (e) {
+          console.error(
+            `liked import: failed to fetch instances for ${design.title}`,
+            e,
+          );
+          continue;
+        }
+        setUploadQueue((prev) => prev + instances.length);
+        for (const inst of instances) {
+          try {
+            const newModel = await importModelFromIdByHost(
+              design.webUrl,
+              inst.id,
+              inst.name,
+              inst.parentId,
+              inst.previewPath,
+              folderId,
+              inst.typeName,
+            );
+            await handleUpdateSTEPThumbnail(newModel);
+          } catch (e) {
+            if (e instanceof MakerworldAuthExpiredError) {
+              setBambuAuthExpired(true);
+              setUploadQueue(0);
+              throw e; // bubble up so the modal can show the banner
+            }
+            console.error(
+              `liked import: failed to import instance ${inst.id} of ${design.title}`,
+              e,
+            );
+          } finally {
+            setUploadQueue((prev) => Math.max(0, prev - 1));
+          }
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleImportSubmit = async (e: React.FormEvent) => {
@@ -680,6 +744,7 @@ const App = () => {
                   }}
                   onUpload={(files) => handleUpload(files)}
                   onImport={handleOpenImport}
+                  onBrowseLiked={handleOpenLiked}
                   onSelectModel={(m) => setSelectedModelId(m.id)}
                   onDelete={handleDeleteModel}
                   selectedModelId={selectedModelId}
@@ -1018,6 +1083,19 @@ const App = () => {
               )}
 
               {/* Import Options Modal */}
+              <MakerworldLikedModal
+                open={showLikedModal}
+                onClose={() => setShowLikedModal(false)}
+                folders={folders}
+                defaultFolderId={
+                  currentFolderId !== "all"
+                    ? currentFolderId
+                    : folders[0]?.id || ""
+                }
+                onImport={handleLikedImport}
+                bambuAuthExpired={bambuAuthExpired}
+              />
+
               {showImportOptionsModal && (
                 <div
                   className={`fixed left-0 top-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center p-4 ${

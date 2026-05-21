@@ -5,9 +5,15 @@
 
 import { api } from "../api";
 import { STLModel, STLModelCollection } from "../../types";
-import { makerworldApi, MakerworldAuthExpiredError } from "./makerworld";
+import {
+  makerworldApi,
+  MakerworldAuthExpiredError,
+  LikedDesign,
+  LikedListResponse,
+} from "./makerworld";
 
-export { MakerworldAuthExpiredError };
+export { MakerworldAuthExpiredError, makerworldApi };
+export type { LikedDesign, LikedListResponse };
 
 const isMakerworld = (url: string): boolean => {
   try {
