@@ -21,6 +21,7 @@ def persist_imported_model(
     upload_dir: Path,
     db_conn: sqlite3.Connection,
     now_ms: int,
+    source_url: Optional[str] = None,
 ) -> dict:
     """Write the bytes to UPLOAD_DIR/<uuid>.<ext>, insert a row into
     models, return the new model dict.
@@ -49,12 +50,13 @@ def persist_imported_model(
         "tags": ["imported"],
         "description": description,
         "thumbnail": thumbnail or "",
+        "sourceUrl": source_url,
     }
 
     cur = db_conn.cursor()
     cur.execute(
-        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail,sourceUrl) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             model["id"],
             model["name"],
@@ -65,6 +67,7 @@ def persist_imported_model(
             json.dumps(model["tags"]),
             model["description"],
             model["thumbnail"],
+            model["sourceUrl"],
         ),
     )
     db_conn.commit()

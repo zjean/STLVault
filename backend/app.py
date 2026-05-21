@@ -77,10 +77,15 @@ def init_db():
             dateAdded INTEGER,
             tags TEXT,
             description TEXT,
-            thumbnail TEXT
+            thumbnail TEXT,
+            sourceUrl TEXT
         )
         """
     )
+    # Forward-migration for DBs that predate the sourceUrl column.
+    cur.execute("PRAGMA table_info(models)")
+    if "sourceUrl" not in {row["name"] for row in cur.fetchall()}:
+        cur.execute("ALTER TABLE models ADD COLUMN sourceUrl TEXT")
     conn.commit()
 
     # seed folders if empty
@@ -138,6 +143,7 @@ def row_to_model(row: sqlite3.Row) -> Dict[str, Any]:
         "tags": tags,
         "description": row["description"] or "",
         "thumbnail": row["thumbnail"],
+        "sourceUrl": row["sourceUrl"],
     }
 
 
@@ -236,13 +242,14 @@ def upload_model(
     folderId: str = Form("1"),
     thumbnail: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
+    sourceUrl: Optional[str] = Form(None),
 ):
     mid = str(uuid.uuid4())
-    
+
     # Ensure that file.filename is a string before passing it to os.path.splitext, providing a default value if it is None
     filename_str = file.filename or ".stl"
     ext = os.path.splitext(filename_str)[1] or ".stl"
-    
+
     filename = f"{mid}{ext}"
     path = os.path.join(UPLOAD_DIR, filename)
     size = save_upload_file(file, path)
@@ -264,12 +271,13 @@ def upload_model(
         "tags": tag_list,
         "description": "",
         "thumbnail": thumbnail,
+        "sourceUrl": sourceUrl,
     }
 
     conn = get_db_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail,sourceUrl) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             model["id"],
             model["name"],
@@ -280,6 +288,7 @@ def upload_model(
             json.dumps(model["tags"]),
             model["description"],
             model["thumbnail"],
+            model["sourceUrl"],
         ),
     )
     conn.commit()
@@ -297,7 +306,7 @@ def update_model(model_id: str, updates: dict):
         raise HTTPException(status_code=404, detail="Model not found")
 
     # Build update statement
-    allowed = ["name", "folderId", "tags", "description", "thumbnail"]
+    allowed = ["name", "folderId", "tags", "description", "thumbnail", "sourceUrl"]
     fields = []
     values = []
     for k in allowed:
@@ -493,11 +502,12 @@ def import_model_by_id(payload: dict):
     previewPath = payload.get("previewPath")
     folderId = payload.get("folderId", "1")
     typeName = payload.get("typeName")
+    sourceUrl = payload.get("sourceUrl")
     mid = str(uuid.uuid4())
-    
+
     # we only save stl for now
     ext = typeName if typeName is not None else ".stl"
-    
+
     filename = f"{mid}.{ext}"
     path = os.path.join(UPLOAD_DIR, filename)
 
@@ -525,13 +535,14 @@ def import_model_by_id(payload: dict):
         "dateAdded": now_ms(),
         "tags": ["imported"],
         "description": "Imported from Printables",
-        "thumbnail": thumbnail
+        "thumbnail": thumbnail,
+        "sourceUrl": sourceUrl,
     }
 
     conn = get_db_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,description,thumbnail,sourceUrl) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             model["id"],
             model["name"],
@@ -542,6 +553,7 @@ def import_model_by_id(payload: dict):
             json.dumps(model["tags"]),
             model["description"],
             model["thumbnail"],
+            model["sourceUrl"],
         ),
     )
     conn.commit()
