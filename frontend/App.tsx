@@ -8,6 +8,7 @@ import RecentView from "./components/RecentView";
 import TagsView from "./components/TagsView";
 import TagDetailView from "./components/TagDetailView";
 import Dialog from "./components/Dialog";
+import ImportOptionsBody from "./components/ImportOptionsBody";
 import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
@@ -1126,112 +1127,34 @@ const App = () => {
                 defaultFolderId={
                   currentFolderId !== "all"
                     ? currentFolderId
-                    : folders[0]?.id || ""
+                    : folders[0]?.id || "all"
                 }
                 onImport={handleLikedImport}
                 bambuAuthExpired={bambuAuthExpired}
               />
 
               {showImportOptionsModal && (
-                <div
-                  className={`fixed left-0 top-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
-                  }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                <Dialog
+                  onClose={() => setShowImportOptionsModal(false)}
+                  title="Select files to import"
+                  icon={<Globe size={16} />}
+                  size="md"
+                  noBodyScroll
                 >
-                  <div
-                    className="relative bg-surface border border-border rounded-xl p-6 w-full lg:w-1/2 shadow-2xl animate-in zoom-in-95 duration-200 "
-                    style={{
-                      maxHeight: Math.max(
-                        240,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="static flex top-0 justify-between items-center mb-6">
-                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <Globe className="w-5 h-5 text-accent" /> Select
-                        model to download
-                      </h3>
-                      <button
-                        onClick={() => setShowImportOptionsModal(false)}
-                        className="text-fg-3 hover:text-fg"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    {/* File List */}
-                    <div
-                      className={`static overflow-auto px-2 ${
-                        visualViewport.height > 900 ? "h-[700px]" : "h-[400px]"
-                      }`}
-                    >
-                      {Array.from(folderOptions).map((f) => (
-                        <div>
-                          <div className="text-xl font-medium p-4">
-                            {f ? f : "Root Folder"}
-                          </div>
-                          {modelsOptions.map((model) => (
-                            <div>
-                              {model.folder == f ? (
-                                <div
-                                  key={model.id}
-                                  onClick={() =>
-                                    handleOptionsToggleSelection(model.id)
-                                  }
-                                  className={`group bg-bg-2 border rounded-xl p-4 cursor-pointer transition-all flex items-center gap-4 mb-2 relative overflow-hidden
-                              ${
-                                selectedOptions.has(model.id)
-                                  ? "border-accent ring-1 ring-accent/50"
-                                  : "border-border hover:border-border"
-                              }
-                            `}
-                                >
-                                  <div className="w-12 h-12 bg-accent/15 rounded-lg flex items-center justify-center text-accent group-hover:text-accent group-hover:scale-110 transition-all shrink-0">
-                                    <img
-                                      src={model.previewPath}
-                                      alt={model.name}
-                                      className="w-12 h-12 object-contain opacity-80 group-hover:opacity-100 transition-opacity"
-                                    />
-                                  </div>
-
-                                  <div className="min-w-0">
-                                    <h3 className="font-semibold text-fg truncate group-hover:text-fg">
-                                      {model.name}
-                                    </h3>
-                                    <p className="text-xs text-fg-3">
-                                      {model.typeName}
-                                    </p>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div></div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-
-                    <div
-                      onClick={() => handleImportChoice()}
-                      className="static bottom-0 p-2 mt-4 cursor-pointer rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors text-center"
-                    >
-                      {" "}
-                      Import{" "}
-                    </div>
-                  </div>
-                </div>
+                  <ImportOptionsBody
+                    modelsOptions={modelsOptions}
+                    selectedOptions={selectedOptions}
+                    onToggle={handleOptionsToggleSelection}
+                    onSelectAll={() =>
+                      setSelectedOptions(
+                        new Set(modelsOptions.map((m) => m.id)),
+                      )
+                    }
+                    onClearAll={() => setSelectedOptions(new Set())}
+                    onCancel={() => setShowImportOptionsModal(false)}
+                    onImport={() => handleImportChoice()}
+                  />
+                </Dialog>
               )}
 
               {/* Delete Confirmation Modal */}

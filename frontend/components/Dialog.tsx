@@ -16,6 +16,13 @@ interface DialogProps {
   size?: Size;
   children: React.ReactNode;
   closeOnBackdrop?: boolean;
+  /**
+   * When true, the body wrapper is `flex-1 min-h-0 overflow-hidden`
+   * instead of `flex-1 overflow-y-auto` — the child manages its own
+   * scroll regions. Use when the body has a fixed top/bottom bar and
+   * a single scrollable region between them.
+   */
+  noBodyScroll?: boolean;
 }
 
 const Dialog: React.FC<DialogProps> = ({
@@ -25,6 +32,7 @@ const Dialog: React.FC<DialogProps> = ({
   size = "sm",
   children,
   closeOnBackdrop = true,
+  noBodyScroll = false,
 }) => {
   const viewport = useVisualViewport();
 
@@ -78,7 +86,15 @@ const Dialog: React.FC<DialogProps> = ({
             <X size={16} />
           </button>
         </header>
-        <div className="flex-1 overflow-y-auto">{children}</div>
+        <div
+          className={
+            noBodyScroll
+              ? "flex-1 min-h-0 overflow-hidden flex flex-col"
+              : "flex-1 overflow-y-auto"
+          }
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
