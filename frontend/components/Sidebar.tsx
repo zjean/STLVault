@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Folder as FolderIcon,
   Plus,
@@ -6,35 +7,12 @@ import {
   LayoutGrid,
   Pencil,
   Trash2,
-  Check,
-  X,
   ChevronRight,
-  Settings,
-  PlusIcon,
+  Settings as SettingsIcon,
+  Clock,
+  Tag,
 } from "lucide-react";
 import { Folder, STLModel, StorageStats } from "../types";
-
-import Stack from "@mui/material/Stack";
-import IconButton from "@mui/material/IconButton";
-import Typography from "@mui/material/Typography";
-import { TreeViewDefaultItemModelProperties } from "@mui/x-tree-view/models";
-import { useTreeItemUtils } from "@mui/x-tree-view/hooks";
-import {
-  UseTreeItemContentSlotOwnProps,
-  UseTreeItemLabelSlotOwnProps,
-  UseTreeItemStatus,
-} from "@mui/x-tree-view/useTreeItem";
-import { RichTreeView } from "@mui/x-tree-view/RichTreeView";
-import { SimpleTreeView } from "@mui/x-tree-view/SimpleTreeView";
-import {
-  TreeItem,
-  TreeItemProps,
-  TreeItemSlotProps,
-} from "@mui/x-tree-view/TreeItem";
-import Container from "@mui/material/Container";
-import Button from "@mui/material/Button";
-import OutlinedInput from "@mui/material/OutlinedInput";
-import Badge from "@mui/material/Badge";
 
 const APP_TAG = import.meta.env.VITE_APP_TAG || "dev";
 
@@ -49,7 +27,6 @@ interface SidebarProps {
   onDeleteFolder: (id: string) => void;
   onMoveToFolder: (folderId: string, modelIds: string[]) => void;
   onUploadToFolder: (folderId: string, files: FileList) => void;
-  onOpenSettings: () => void;
   variant?: "desktop" | "mobile";
 }
 
@@ -64,66 +41,71 @@ const Sidebar: React.FC<SidebarProps> = ({
   onDeleteFolder,
   onMoveToFolder,
   onUploadToFolder,
-  onOpenSettings,
   variant = "desktop",
 }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const isDesktopVariant = variant === "desktop";
-  const [isCreatingRoot, setIsCreatingRoot] = useState(false);
-  const [newRootName, setNewRootName] = useState("");
+  const onLibraryRoute = location.pathname === "/";
+  const onSettingsRoute = location.pathname === "/settings";
 
-  // State for tree interactions
+  // Tree interaction state
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [creatingSubfolderId, setCreatingSubfolderId] = useState<string | null>(
-    null,
-  );
+  const [editingName, setEditingName] = useState("");
+  const [creatingParentId, setCreatingParentId] = useState<string | null | undefined>(undefined);
+  const [creatingName, setCreatingName] = useState("");
   const [dragTargetId, setDragTargetId] = useState<string | null>(null);
+  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
 
-  // Resize state
-  const [width, setWidth] = useState(330);
+  // Desktop resize
+  const [width, setWidth] = useState(268);
   const [isResizing, setIsResizing] = useState(false);
 
-  const startResizing = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDesktopVariant) return;
-      e.preventDefault(); // Prevent text selection
-      setIsResizing(true);
-    },
-    [isDesktopVariant],
-  );
-
-  // Calculate direct counts only (not recursive, matching file system behavior usually)
   const folderCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     models.forEach((m) => {
       counts[m.folderId] = (counts[m.folderId] || 0) + 1;
     });
     folders.forEach((f) => {
-      counts[f.parentId] = (counts[f.parentId] || 0) + 1;
+      if (f.parentId) counts[f.parentId] = (counts[f.parentId] || 0) + 1;
     });
     return counts;
   }, [models, folders]);
 
+  const childrenByParent = useMemo(() => {
+    const map: Record<string, Folder[]> = {};
+    folders.forEach((f) => {
+      const key = f.parentId ?? "__root__";
+      (map[key] ||= []).push(f);
+    });
+    Object.values(map).forEach((list) =>
+      list.sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    return map;
+  }, [folders]);
+
+  const rootFolders = childrenByParent["__root__"] ?? [];
+
+  // Resize handlers (desktop only)
+  const startResizing = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isDesktopVariant) return;
+      e.preventDefault();
+      setIsResizing(true);
+    },
+    [isDesktopVariant],
+  );
+
   useEffect(() => {
-    if (!isDesktopVariant) return;
-    if (!isResizing) return;
-
+    if (!isDesktopVariant || !isResizing) return;
     const handleMouseMove = (e: MouseEvent) => {
-      // Limit width between 200px and 600px
-      const newWidth = Math.min(Math.max(e.clientX, 200), 600);
-      setWidth(newWidth);
+      setWidth(Math.min(Math.max(e.clientX, 220), 420));
     };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
+    const handleMouseUp = () => setIsResizing(false);
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
-
-    // Add grabbing cursor to body during resize
     document.body.style.cursor = "col-resize";
-
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
@@ -131,41 +113,24 @@ const Sidebar: React.FC<SidebarProps> = ({
     };
   }, [isResizing, isDesktopVariant]);
 
-  // Ensure parents of current folder are expanded
+  // Auto-expand the path to the current folder
   useEffect(() => {
-    if (currentFolderId && currentFolderId !== "all") {
-      const expandPath = (id: string, path: Set<string>) => {
-        const folder = folders.find((f) => f.id === id);
-        if (folder && folder.parentId) {
-          path.add(folder.parentId);
-          expandPath(folder.parentId, path);
-        }
-      };
-
-      setExpandedIds((prev) => {
-        const next = new Set<string>(prev);
-        expandPath(currentFolderId, next);
-        return next;
-      });
-    }
+    if (!currentFolderId || currentFolderId === "all") return;
+    const expandPath = (id: string, path: Set<string>) => {
+      const folder = folders.find((f) => f.id === id);
+      if (folder && folder.parentId) {
+        path.add(folder.parentId);
+        expandPath(folder.parentId, path);
+      }
+    };
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      expandPath(currentFolderId, next);
+      return next;
+    });
   }, [currentFolderId, folders]);
 
-  const handleCreateFolderSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newRootName.trim() && !creatingSubfolderId) {
-      onCreateFolder(newRootName.trim(), null);
-      setNewRootName("");
-      setIsCreatingRoot(false);
-    } else if (newRootName.trim() && creatingSubfolderId != "") {
-      onCreateFolder(newRootName.trim(), creatingSubfolderId);
-      setNewRootName("");
-      setIsCreatingRoot(false);
-      setCreatingSubfolderId("");
-    }
-  };
-
   const toggleExpand = (id: string) => {
-    onSelectFolder(id);
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -174,12 +139,38 @@ const Sidebar: React.FC<SidebarProps> = ({
     });
   };
 
-  const handleExpand = (e) => {
-    e.stopPropagation();
-    e.preventDefault();
+  const startRename = (folder: Folder) => {
+    setEditingId(folder.id);
+    setEditingName(folder.name);
+  };
+  const commitRename = () => {
+    if (editingId && editingName.trim()) {
+      onRenameFolder(editingId, editingName.trim());
+    }
+    setEditingId(null);
+    setEditingName("");
   };
 
-  const handleDeleteRequest = (id: string, count: number) => {
+  const startCreate = (parentId: string | null) => {
+    setCreatingParentId(parentId);
+    setCreatingName("");
+    if (parentId) {
+      setExpandedIds((prev) => new Set(prev).add(parentId));
+    }
+  };
+  const commitCreate = () => {
+    if (creatingName.trim() && creatingParentId !== undefined) {
+      onCreateFolder(creatingName.trim(), creatingParentId);
+    }
+    setCreatingParentId(undefined);
+    setCreatingName("");
+  };
+  const cancelCreate = () => {
+    setCreatingParentId(undefined);
+    setCreatingName("");
+  };
+
+  const requestDelete = (id: string, count: number) => {
     if (count > 0) {
       alert("Folder must be empty to delete (no files and no subfolders).");
       return;
@@ -187,32 +178,24 @@ const Sidebar: React.FC<SidebarProps> = ({
     onDeleteFolder(id);
   };
 
-  // Drag Handlers
+  // Drag-drop
   const handleDragOver = (e: React.DragEvent, folderId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    if (dragTargetId !== folderId) {
-      setDragTargetId(folderId);
-    }
+    if (dragTargetId !== folderId) setDragTargetId(folderId);
   };
-
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
-
   const handleDrop = (e: React.DragEvent, folderId: string) => {
     e.preventDefault();
     e.stopPropagation();
     setDragTargetId(null);
-
-    // Check for Files first (Upload to folder)
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       onUploadToFolder(folderId, e.dataTransfer.files);
       return;
     }
-
-    // Check for internal move (Move existing cards to folder)
     try {
       const data = e.dataTransfer.getData("application/json");
       if (data) {
@@ -226,7 +209,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  // Format Storage Display
+  // Storage
   const formatSize = (bytes: number) => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -234,291 +217,358 @@ const Sidebar: React.FC<SidebarProps> = ({
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   };
-
   const percentUsed =
     storageStats.total > 0
       ? Math.min((storageStats.used / storageStats.total) * 100, 100)
       : 0;
 
-  // Root folders
-  const rootFolders = folders.filter((f) => f.parentId === null);
-
-  //builds the treeview structure
-  const treefolders = () => {
-    const treeitems: TreeViewDefaultItemModelProperties[] = [];
-    rootFolders.map((folder) => {
-      treeitems.push({
-        id: folder.id,
-        label: folder.name,
-        children: [],
-      });
-    });
-    treeitems.map((folder) => {
-      folders.map((subfolder) => {
-        if (subfolder.parentId === folder.id) {
-          folder.children.push({ id: subfolder.id, label: subfolder.name });
-        }
-      });
-      folder.children.sort((a, b) => {
-        return a.label.localeCompare(b.label);
-      });
-    });
-    treeitems.sort((a, b) => {
-      return a.label.localeCompare(b.label);
-    });
-    return treeitems;
-  };
-
-  interface CustomLabelProps extends UseTreeItemLabelSlotOwnProps {
-    status: UseTreeItemStatus;
-    onClick: React.MouseEventHandler<HTMLElement>;
-    onPlusClick: React.MouseEventHandler<HTMLElement>;
-  }
-
-  function CustomLabel({
-    children,
-    status,
-    onClick,
-    onPlusClick,
-    ...props
-  }: CustomLabelProps) {
+  // Inline editor row used for both rename + create
+  const InlineEditor: React.FC<{
+    value: string;
+    placeholder: string;
+    onChange: (v: string) => void;
+    onCommit: () => void;
+    onCancel: () => void;
+    autoFocus?: boolean;
+  }> = ({ value, placeholder, onChange, onCommit, onCancel, autoFocus = true }) => {
+    const ref = useRef<HTMLInputElement>(null);
+    useEffect(() => {
+      if (autoFocus) ref.current?.focus();
+    }, [autoFocus]);
     return (
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        flexGrow={1}
-        sx={{ minWidth: 0 }}
-        {...props}
-      >
-        <Typography noWrap>{children}</Typography>
-        <Stack direction="row">
-          <IconButton
-            onClick={onPlusClick}
-            aria-label="select item"
-            size="small"
-            sx={{ color: "grey.300" }}
-          >
-            <PlusIcon />
-          </IconButton>
-          <IconButton
-            onClick={onClick}
-            aria-label="select item"
-            size="small"
-            edge="end"
-            sx={{ color: "grey.300" }}
-          >
-            <Trash2 />
-          </IconButton>
-        </Stack>
-      </Stack>
-    );
-  }
-
-  const CustomTreeItem = React.forwardRef(function CustomTreeItem(
-    props: TreeItemProps,
-    ref: React.Ref<HTMLLIElement>,
-  ) {
-    const { interactions, status } = useTreeItemUtils({
-      itemId: props.itemId,
-      children: props.children,
-    });
-
-    const handleContentClick: UseTreeItemContentSlotOwnProps["onClick"] = (
-      event,
-    ) => {
-      onSelectFolder(props.itemId);
-    };
-    const count = folderCounts[props.itemId] || 0;
-
-    const handleIconButtonClick = (event: React.MouseEvent) => {
-      event.stopPropagation();
-      handleDeleteRequest(props.itemId, count);
-    };
-
-    const handlePlusClick = (event: React.MouseEvent) => {
-      event.stopPropagation();
-      setCreatingSubfolderId(props.itemId);
-      setIsCreatingRoot(true);
-      document.getElementById("folder-name-input").focus();
-    };
-
-    return (
-      <TreeItem
-        {...props}
+      <input
         ref={ref}
-        onDragOver={(e) => handleDragOver(e, props.itemId)}
-        onDragLeave={handleDragLeave}
-        onDrop={(e) => handleDrop(e, props.itemId)}
-        className={
-          props.itemId === dragTargetId
-            ? "bg-white/10 rounded-md ring-2 ring-white"
-            : ""
-        }
-        slots={{
-          label: CustomLabel,
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onCommit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onCommit();
+          else if (e.key === "Escape") onCancel();
         }}
-        slotProps={
-          {
-            label: {
-              onClick: handleIconButtonClick,
-              onPlusClick: handlePlusClick,
-              status,
-            },
-            content: { onClick: handleContentClick },
-          } as TreeItemSlotProps
-        }
+        onClick={(e) => e.stopPropagation()}
+        className="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-[13px] text-fg outline-none focus:ring-2 focus:ring-accent/30"
       />
     );
-  });
+  };
+
+  const TreeRow: React.FC<{ folder: Folder; depth: number }> = ({ folder, depth }) => {
+    const childList = childrenByParent[folder.id] ?? [];
+    const hasChildren = childList.length > 0;
+    const isOpen = expandedIds.has(folder.id);
+    const isSelected = currentFolderId === folder.id && onLibraryRoute;
+    const isEditing = editingId === folder.id;
+    const isDropTarget = dragTargetId === folder.id;
+    const count = folderCounts[folder.id] || 0;
+    const isCreatingHere = creatingParentId === folder.id;
+
+    return (
+      <div>
+        <div
+          className={[
+            "group/row flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer transition-colors",
+            isSelected
+              ? "bg-accent/15 text-accent"
+              : "text-fg-2 hover:bg-bg-3 hover:text-fg",
+            isDropTarget ? "ring-1 ring-accent/60 bg-accent/10" : "",
+          ].join(" ")}
+          onClick={() => {
+            if (!onLibraryRoute) navigate("/");
+            onSelectFolder(folder.id);
+          }}
+          onDragOver={(e) => handleDragOver(e, folder.id)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, folder.id)}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (hasChildren) toggleExpand(folder.id);
+            }}
+            className={`w-3.5 h-3.5 grid place-items-center text-fg-3 shrink-0 ${
+              hasChildren ? "" : "invisible"
+            }`}
+            aria-label={isOpen ? "Collapse folder" : "Expand folder"}
+            tabIndex={hasChildren ? 0 : -1}
+          >
+            <ChevronRight
+              size={12}
+              className={`transition-transform ${isOpen ? "rotate-90" : ""}`}
+            />
+          </button>
+          <FolderIcon
+            size={14}
+            className={isSelected ? "text-accent shrink-0" : "text-fg-3 shrink-0"}
+          />
+          {isEditing ? (
+            <InlineEditor
+              value={editingName}
+              placeholder="Folder name"
+              onChange={setEditingName}
+              onCommit={commitRename}
+              onCancel={() => {
+                setEditingId(null);
+                setEditingName("");
+              }}
+            />
+          ) : (
+            <span className="flex-1 min-w-0 truncate text-[13px]">
+              {folder.name}
+            </span>
+          )}
+          {!isEditing && (
+            <>
+              <span
+                className={`font-mono text-[10.5px] text-fg-3 transition-opacity group-hover/row:opacity-0 ${
+                  isSelected ? "text-accent" : ""
+                }`}
+              >
+                {count > 0 ? count : ""}
+              </span>
+              <div className="absolute-not flex gap-0.5 opacity-0 group-hover/row:opacity-100 transition-opacity -mr-1">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startRename(folder);
+                  }}
+                  className="w-[22px] h-[22px] grid place-items-center rounded text-fg-3 hover:bg-bg-2 hover:text-fg"
+                  aria-label="Rename folder"
+                  title="Rename"
+                >
+                  <Pencil size={12} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startCreate(folder.id);
+                  }}
+                  className="w-[22px] h-[22px] grid place-items-center rounded text-fg-3 hover:bg-bg-2 hover:text-fg"
+                  aria-label="Add subfolder"
+                  title="New subfolder"
+                >
+                  <Plus size={12} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    requestDelete(folder.id, count);
+                  }}
+                  className="w-[22px] h-[22px] grid place-items-center rounded text-fg-3 hover:bg-danger/15 hover:text-danger"
+                  aria-label="Delete folder"
+                  title="Delete"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        {isOpen && (hasChildren || isCreatingHere) && (
+          <div className="pl-[18px] flex flex-col gap-px">
+            {childList.map((child) => (
+              <TreeRow key={child.id} folder={child} depth={depth + 1} />
+            ))}
+            {isCreatingHere && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <span className="w-3.5 h-3.5 shrink-0" />
+                <FolderIcon size={14} className="text-fg-3 shrink-0" />
+                <InlineEditor
+                  value={creatingName}
+                  placeholder="New folder"
+                  onChange={setCreatingName}
+                  onCommit={commitCreate}
+                  onCancel={cancelCreate}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const navItemClass = (active: boolean, disabled = false) =>
+    [
+      "flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13.5px] w-full text-left transition-colors",
+      active
+        ? "bg-accent/15 text-accent font-medium"
+        : disabled
+          ? "text-fg-3 opacity-50 cursor-not-allowed"
+          : "text-fg-2 hover:bg-bg-3 hover:text-fg",
+    ].join(" ");
 
   return (
-    <Container
-      disableGutters
-      sx={{ bgcolor: "common.black" }}
-      className="border-r border-vault-700 flex flex-col h-full select-none relative shrink-0 group/sidebar mr-6"
+    <div
+      className="bg-bg-2 border-r border-border flex flex-col h-full min-h-0 select-none relative shrink-0"
       style={isDesktopVariant ? { width } : undefined}
       onDragLeave={() => setDragTargetId(null)}
     >
-      <div className="p-6 flex items-center gap-3">
-        <Stack
-          direction="row"
-          gap={1}
-          sx={{
-            justifyContent: "flex-start",
-            alignItems: "baseline",
-            minWidth: 0,
+      {/* Head */}
+      <div className="px-[18px] pt-[18px] pb-[14px] flex items-center gap-2.5 border-b border-border-soft">
+        <div
+          className="w-[30px] h-[30px] rounded-lg grid place-items-center shrink-0 shadow-soft"
+          style={{
+            background:
+              "linear-gradient(140deg, oklch(var(--accent)), oklch(0.5 0.12 var(--accent-h)))",
+            color: "oklch(var(--accent-fg))",
           }}
         >
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20 shrink-0 pt-1">
-            <Box className="w-5 h-5 text-white pb-1" />
-          </div>
-          <Typography noWrap variant="h4">
-            STLVault
-          </Typography>
-          <Typography
-            noWrap
-            variant="subtitle2"
-            sx={{ color: "text.secondary" }}
-          >
-            v{APP_TAG}
-          </Typography>
-        </Stack>
+          <Box size={18} />
+        </div>
+        <span className="font-semibold text-[15px] -tracking-[0.01em] text-fg">
+          STL Vault
+        </span>
+        <span className="font-mono text-[10px] text-fg-3 bg-bg-3 px-1.5 py-0.5 rounded ml-auto">
+          v{APP_TAG}
+        </span>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-vault-700 scrollbar-track-transparent overflow-y-scroll">
-        <div className="px-4 mb-4">
-          <Button
-            fullWidth
-            startIcon={<Plus />}
-            onClick={() => {
-              setIsCreatingRoot(true);
-              document.getElementById("folder-name-input").focus();
-            }}
-            variant="outlined"
-          >
-            New Root Folder
-          </Button>
-        </div>
-
-        <form
-          onSubmit={handleCreateFolderSubmit}
-          className={`px-4 mb-4 transition-all duration-400 ${
-            isCreatingRoot ? "opacity-100" : "opacity-0 origin-top h-0"
-          }`}
+      {/* Top nav */}
+      <div className="px-3 pt-3.5 pb-1.5 flex flex-col gap-0.5">
+        <button
+          type="button"
+          className={navItemClass(onLibraryRoute && currentFolderId === "all")}
+          onClick={() => {
+            if (!onLibraryRoute) navigate("/");
+            onSelectFolder("all");
+          }}
         >
-          <div className="flex items-center gap-1 mb-3">
-            <OutlinedInput
-              id="folder-name-input"
-              type="text"
-              className="w-full"
-              placeholder="Folder Name..."
-              value={newRootName}
-              onChange={(e) => setNewRootName(e.target.value)}
-              onBlur={() => {
-                !newRootName.trim();
-                setIsCreatingRoot(false);
-                setCreatingSubfolderId("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setIsCreatingRoot(false);
-                  setCreatingSubfolderId("");
-                }
+          <LayoutGrid size={16} />
+          <span className="flex-1 text-left">All Models</span>
+          <span
+            className={`ml-auto font-mono text-[11px] px-1.5 py-px rounded min-w-[22px] text-center ${
+              onLibraryRoute && currentFolderId === "all"
+                ? "bg-accent/15 text-accent"
+                : "bg-bg-3 text-fg-3"
+            }`}
+          >
+            {models.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={navItemClass(false, true)}
+          disabled
+          title="Coming soon"
+        >
+          <Clock size={16} />
+          <span className="flex-1 text-left">Recent</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-fg-3">
+            Soon
+          </span>
+        </button>
+        <button
+          type="button"
+          className={navItemClass(false, true)}
+          disabled
+          title="Coming soon"
+        >
+          <Tag size={16} />
+          <span className="flex-1 text-left">Tags</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-fg-3">
+            Soon
+          </span>
+        </button>
+        <button
+          type="button"
+          className={navItemClass(onSettingsRoute)}
+          onClick={() => navigate("/settings")}
+        >
+          <SettingsIcon size={16} />
+          <span className="flex-1 text-left">Settings</span>
+        </button>
+      </div>
+
+      {/* Library label */}
+      <div className="px-3 pt-3 pb-1 flex items-center justify-between text-[10.5px] uppercase tracking-[0.08em] text-fg-3">
+        <button
+          type="button"
+          onClick={() => setLibraryCollapsed((c) => !c)}
+          className="flex items-center gap-1.5 px-2 py-1.5 hover:text-fg-2 transition-colors"
+        >
+          <ChevronRight
+            size={12}
+            className={`transition-transform ${libraryCollapsed ? "" : "rotate-90"}`}
+          />
+          Library
+        </button>
+        <button
+          type="button"
+          onClick={() => startCreate(null)}
+          className="w-6 h-6 grid place-items-center rounded text-fg-3 hover:bg-bg-3 hover:text-fg transition-colors"
+          aria-label="New root folder"
+          title="New root folder"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+
+      {/* Tree */}
+      <div
+        className={`flex-1 overflow-y-auto px-3 flex flex-col gap-px ${
+          libraryCollapsed ? "hidden" : ""
+        }`}
+      >
+        {creatingParentId === null && (
+          <div className="flex items-center gap-1.5 px-2 py-1.5">
+            <span className="w-3.5 h-3.5 shrink-0" />
+            <FolderIcon size={14} className="text-fg-3 shrink-0" />
+            <InlineEditor
+              value={creatingName}
+              placeholder="New folder"
+              onChange={setCreatingName}
+              onCommit={commitCreate}
+              onCancel={cancelCreate}
+            />
+          </div>
+        )}
+        {rootFolders.length === 0 && creatingParentId === undefined && (
+          <p className="px-2 py-2 text-[12px] text-fg-3">
+            No folders yet. Click + to create one.
+          </p>
+        )}
+        {rootFolders.map((folder) => (
+          <TreeRow key={folder.id} folder={folder} depth={0} />
+        ))}
+      </div>
+
+      {/* Footer */}
+      <div className="px-3 py-3 border-t border-border-soft">
+        <div className="p-3 bg-bg-3 border border-border-soft rounded-lg">
+          <div className="flex justify-between items-baseline mb-2">
+            <span className="text-[12px] text-fg-2 font-medium">Storage</span>
+            <span className="font-mono text-[11px] text-fg-3">
+              {formatSize(storageStats.used)}
+              {storageStats.total > 0 ? ` / ${formatSize(storageStats.total)}` : ""}
+            </span>
+          </div>
+          <div className="h-[5px] rounded-pill overflow-hidden bg-fg/10">
+            <div
+              className="h-full rounded-pill transition-[width] duration-500"
+              style={{
+                width: `${percentUsed}%`,
+                background:
+                  "linear-gradient(90deg, oklch(var(--accent)), oklch(0.7 0.16 calc(var(--accent-h) + 30)))",
               }}
             />
           </div>
-        </form>
-
-        <Button
-          variant="contained"
-          startIcon={<LayoutGrid />}
-          color={currentFolderId === "all" ? "info" : "primary"}
-          onClick={() => onSelectFolder("all")}
-          endIcon={
-            <Badge badgeContent={models.length} className="mr-2"></Badge>
-          }
-          className="w-full"
-          sx={{ alignItems: "center", justifyContent: "space-between" }}
-        >
-          All Models
-        </Button>
-
-        <div className="pt-2 pb-1 px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider flex justify-between items-center">
-          <Typography variant="subtitle1">Library</Typography>
-        </div>
-
-        <div className="space-y-1 pb-4 ">
-          <RichTreeView
-            items={treefolders()}
-            slots={{ item: CustomTreeItem }}
-            expansionTrigger="iconContainer"
-            onItemExpansionToggle={handleExpand}
-            isItemEditable
-            onItemLabelChange={(itemId, label) => onRenameFolder(itemId, label)}
-          />
-        </div>
-      </nav>
-
-      <div className="p-4 border-t border-vault-700 z-10 gap-3 flex flex-col">
-        <Button
-          variant="outlined"
-          startIcon={<Settings />}
-          color="info"
-          onClick={onOpenSettings}
-          className="w-full"
-          sx={{ alignItems: "center", justifyContent: "center" }}
-        >
-          Settings
-        </Button>
-
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-md p-3 shadow-lg">
-          <p className="text-xs text-white/80 font-medium mb-1 truncate mb-2">
-            Storage Used
-          </p>
-          <div className="w-full bg-black/20 rounded-full h-1.5 mb-1 overflow-hidden">
-            <div
-              className="bg-white h-full rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${percentUsed}%` }}
-            ></div>
-          </div>
-          <p className="text-[10px] text-white/60 flex justify-between">
-            <span>{formatSize(storageStats.used)}</span>
-            <span>{formatSize(storageStats.total)}</span>
-          </p>
         </div>
       </div>
 
-      {/* Resizer Handle */}
+      {/* Resizer */}
       {isDesktopVariant && (
         <div
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500 transition-colors z-50 ${
-            isResizing ? "bg-blue-500" : "bg-transparent"
+          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 transition-colors ${
+            isResizing ? "bg-accent" : "bg-transparent hover:bg-accent/40"
           }`}
           onMouseDown={startResizing}
         />
       )}
-    </Container>
+    </div>
   );
 };
 
