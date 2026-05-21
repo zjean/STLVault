@@ -15,6 +15,7 @@ import {
   RefreshCw,
   AlertTriangle,
   ScreenShareIcon,
+  ExternalLink,
 } from "lucide-react";
 
 import { generateThumbnail } from "../services/thumbnailGenerator";
@@ -387,6 +388,42 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
                   </Typography>
                 </Stack>
               </div>
+              {model.sourceUrl && (
+                <div className="col-span-2 space-y-1">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      justifyContent: "flex-start",
+                      alignItems: "baseline",
+                      minWidth: 0,
+                    }}
+                  >
+                    <ExternalLink className="w-3 h-3 shrink-0" />
+                    <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                      Source:
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      component="a"
+                      href={model.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      sx={{
+                        color: "primary.main",
+                        textDecoration: "none",
+                        "&:hover": { textDecoration: "underline" },
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                      }}
+                    >
+                      {model.sourceUrl}
+                    </Typography>
+                  </Stack>
+                </div>
+              )}
             </div>
             <Divider />
 

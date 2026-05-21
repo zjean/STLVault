@@ -28,6 +28,7 @@ export interface STLModel {
   description: string;
   dimensions?: { x: number; y: number; z: number };
   thumbnail?: string;
+  sourceUrl?: string | null;
 }
 
 export interface STLModelCollection {

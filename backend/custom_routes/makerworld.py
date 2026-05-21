@@ -34,6 +34,7 @@ class ImportBody(BaseModel):
     previewPath: Optional[str] = None
     folderId: str = "1"
     typeName: str = "3mf"
+    sourceUrl: Optional[str] = None
 
 
 # Same injection pattern as bambu_auth router — app.py supplies the
@@ -106,6 +107,7 @@ def import_model_by_id(body: ImportBody):
             upload_dir=_upload_dir,
             db_conn=conn,
             now_ms=_now_ms(),
+            source_url=body.sourceUrl,
         )
         return model
     finally:

@@ -183,6 +183,7 @@ export const api = {
     previewPath: string,
     folderId: string,
     typeName: string,
+    sourceUrl?: string,
   ): Promise<STLModel> => {
     const res = await fetch(`${API_BASE_URL}/printables/importid`, {
       method: "POST",
@@ -194,6 +195,7 @@ export const api = {
         previewPath,
         folderId,
         typeName,
+        sourceUrl,
       }),
     });
     if (!res.ok) throw new Error("Import failed");
