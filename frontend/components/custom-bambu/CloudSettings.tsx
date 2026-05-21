@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Cloud, AlertTriangle, LogOut, Mail, RefreshCw } from "lucide-react";
+import {
+  Cloud,
+  AlertTriangle,
+  ClipboardPaste,
+  LogOut,
+  Mail,
+  RefreshCw,
+} from "lucide-react";
 import {
   bambuAuth,
   BambuAuthApiError,
@@ -31,6 +38,12 @@ const CloudSettings: React.FC = () => {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Alternative sign-in for users on Bambu social login (no email/password):
+  // paste an access token captured from the browser DevTools.
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteToken, setPasteToken] = useState("");
+  const [pasteRefresh, setPasteRefresh] = useState("");
+  const [pasteEmail, setPasteEmail] = useState("");
 
   const refreshStatus = async () => {
     try {
@@ -97,6 +110,29 @@ const CloudSettings: React.FC = () => {
     }
   };
 
+  const handlePasteToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pasteToken.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await bambuAuth.pasteToken({
+        accessToken: pasteToken.trim(),
+        refreshToken: pasteRefresh.trim() || undefined,
+        accountEmail: pasteEmail.trim() || undefined,
+      });
+      setPasteToken("");
+      setPasteRefresh("");
+      setPasteEmail("");
+      setPasteOpen(false);
+      await refreshStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Paste-token failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleSignOut = async () => {
     if (busy) return;
     setBusy(true);
@@ -153,28 +189,116 @@ const CloudSettings: React.FC = () => {
       )}
 
       {(phase === "signed_out" || phase === "expired") && (
-        <form onSubmit={handleSendCode} className="space-y-3">
-          <label className="block text-sm font-medium text-slate-400">
-            Bambu account email
-          </label>
-          <input
-            type="email"
-            required
-            disabled={busy}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
-          />
-          <button
-            type="submit"
-            disabled={busy || !email}
-            className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
-          >
-            <Mail className="w-4 h-4" />
-            Send verification code
-          </button>
-        </form>
+        <>
+          <form onSubmit={handleSendCode} className="space-y-3">
+            <label className="block text-sm font-medium text-slate-400">
+              Bambu account email
+            </label>
+            <input
+              type="email"
+              required
+              disabled={busy}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
+            />
+            <button
+              type="submit"
+              disabled={busy || !email}
+              className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+            >
+              <Mail className="w-4 h-4" />
+              Send verification code
+            </button>
+          </form>
+
+          <div className="mt-6 pt-6 border-t border-vault-700">
+            <button
+              type="button"
+              onClick={() => setPasteOpen((v) => !v)}
+              className="text-sm text-slate-400 hover:text-slate-200 inline-flex items-center gap-2 transition-colors"
+            >
+              <ClipboardPaste className="w-4 h-4" />
+              {pasteOpen
+                ? "Hide paste-token option"
+                : "Use social login? Paste an access token instead"}
+            </button>
+
+            {pasteOpen && (
+              <form onSubmit={handlePasteToken} className="mt-4 space-y-3">
+                <div className="p-3 bg-vault-800 rounded-lg border border-vault-700 text-xs text-slate-400 leading-relaxed">
+                  <p className="font-semibold text-slate-300 mb-1">
+                    For Bambu accounts using Google / Apple / other social
+                    login
+                  </p>
+                  <p>
+                    1. Sign into{" "}
+                    <a
+                      href="https://bambulab.com/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:underline"
+                    >
+                      bambulab.com
+                    </a>{" "}
+                    in another tab.
+                    <br />
+                    2. Open DevTools → Application → Cookies → look for{" "}
+                    <code>token</code> (or check Network for an{" "}
+                    <code>Authorization: Bearer …</code> header on a request
+                    to <code>api.bambulab.com</code>).
+                    <br />
+                    3. Paste the value below. The expiry is read from the JWT
+                    automatically.
+                  </p>
+                </div>
+                <label className="block text-sm font-medium text-slate-400">
+                  Access token (required)
+                </label>
+                <textarea
+                  required
+                  disabled={busy}
+                  value={pasteToken}
+                  onChange={(e) => setPasteToken(e.target.value)}
+                  placeholder="eyJhbGciOi..."
+                  rows={3}
+                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 font-mono text-xs"
+                />
+                <label className="block text-sm font-medium text-slate-400">
+                  Refresh token (optional — paste if you have it)
+                </label>
+                <textarea
+                  disabled={busy}
+                  value={pasteRefresh}
+                  onChange={(e) => setPasteRefresh(e.target.value)}
+                  placeholder="(leave blank if you only have the access token)"
+                  rows={2}
+                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 font-mono text-xs"
+                />
+                <label className="block text-sm font-medium text-slate-400">
+                  Account email (optional — just for display)
+                </label>
+                <input
+                  type="email"
+                  disabled={busy}
+                  value={pasteEmail}
+                  onChange={(e) => setPasteEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
+                />
+                <button
+                  type="submit"
+                  disabled={busy || !pasteToken.trim()}
+                  className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  <ClipboardPaste className="w-4 h-4" />
+                  Save token
+                </button>
+              </form>
+            )}
+          </div>
+        </>
       )}
 
       {phase === "code_sent" && (

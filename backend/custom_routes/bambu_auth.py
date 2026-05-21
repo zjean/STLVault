@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -26,6 +27,12 @@ class SendCodeBody(BaseModel):
 class LoginBody(BaseModel):
     email: str
     code: str
+
+
+class PasteTokenBody(BaseModel):
+    accessToken: str
+    refreshToken: Optional[str] = None
+    accountEmail: Optional[str] = None
 
 
 # The DB connection accessor is injected lazily to avoid a circular import
@@ -84,6 +91,33 @@ def status():
         "signedInAs": st.signed_in_as,
         "accessExpiresAt": st.access_expires_at,
         "expired": st.expired,
+    }
+
+
+@router.post("/paste-token")
+def paste_token(body: PasteTokenBody):
+    """Accept a Bambu access token the user obtained out-of-band — e.g.
+    by signing into bambulab.com via Google/Apple/etc social login (no
+    email+password to feed into /login) and copying the token from
+    browser DevTools. Stores it the same way the email-code flow
+    would; expiry is parsed from the JWT exp claim where possible.
+    """
+    conn = _get_db()
+    try:
+        try:
+            creds = ba.save_pasted_token(
+                conn,
+                access_token=body.accessToken,
+                refresh_token=body.refreshToken,
+                account_email=body.accountEmail,
+            )
+        except ba.BambuAuthUpstreamError as e:
+            raise HTTPException(status_code=400, detail=e.message)
+    finally:
+        conn.close()
+    return {
+        "signedInAs": creds.account_email,
+        "accessExpiresAt": creds.access_expires_at,
     }
 
 

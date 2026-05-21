@@ -1,3 +1,6 @@
+import base64
+import binascii
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -58,6 +61,80 @@ def _redact_token(s: Optional[str]) -> str:
     if not s:
         return "<empty>"
     return f"<token len={len(s)}>"
+
+
+def _b64url_decode(s: str) -> bytes:
+    """Decode base64url with padding tolerance — JWT segments routinely
+    omit padding."""
+    pad = (-len(s)) % 4
+    return base64.urlsafe_b64decode(s + ("=" * pad))
+
+
+def parse_jwt_exp_ms(token: str) -> Optional[int]:
+    """Pull `exp` (unix seconds) out of a JWT payload and return it as
+    unix milliseconds. Returns None if the token isn't a JWT or has no
+    exp claim. Does NOT verify the signature — we trust whatever Bambu
+    gave us; if they reject it later, the route returns 401 anyway."""
+    if not token:
+        return None
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        payload_bytes = _b64url_decode(parts[1])
+        payload = json.loads(payload_bytes)
+    except (binascii.Error, ValueError, json.JSONDecodeError):
+        return None
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return None
+    return int(exp) * 1000
+
+
+def save_pasted_token(
+    db_conn,
+    *,
+    access_token: str,
+    refresh_token: Optional[str],
+    account_email: Optional[str],
+    expires_at_ms: Optional[int] = None,
+) -> Credentials:
+    """Persist a token the user obtained out-of-band (e.g. by signing
+    into bambulab.com via social login and copying the access token from
+    DevTools). Computes expiry from the JWT `exp` claim if the caller
+    didn't supply one. Falls back to "30 days from now" if the token
+    isn't a recognisable JWT — the user knows when it was minted, and
+    a wrong-low expiry just triggers an earlier re-paste prompt rather
+    than failing silently."""
+    if not access_token or not access_token.strip():
+        raise BambuAuthUpstreamError(400, "Access token cannot be empty")
+
+    if expires_at_ms is None:
+        expires_at_ms = parse_jwt_exp_ms(access_token)
+    if expires_at_ms is None:
+        # Conservative fallback: 30 days. Bambu tokens are 90 days but
+        # we'd rather under-estimate than have the user wonder why
+        # imports started 401-ing with no warning.
+        log.warning(
+            "bambu_auth: could not parse JWT exp from pasted token, defaulting to 30d"
+        )
+        expires_at_ms = _now_ms() + 30 * 24 * 60 * 60 * 1000
+
+    creds = Credentials(
+        account_email=account_email,
+        access_token=access_token.strip(),
+        refresh_token=(refresh_token or "").strip() or None,
+        access_expires_at=expires_at_ms,
+        updated_at=_now_ms(),
+    )
+    upsert(db_conn, creds)
+    log.info(
+        "bambu_auth: pasted-token sign-in for %s (expires_at=%d, refresh=%s)",
+        account_email or "<unknown>",
+        creds.access_expires_at,
+        "yes" if creds.refresh_token else "no",
+    )
+    return creds
 
 
 def _parse_login_response(payload: dict, *, account_email: Optional[str]) -> Credentials:

@@ -23,6 +23,12 @@ export interface BambuLoginResult {
   accessExpiresAt: number;
 }
 
+export interface PasteTokenInput {
+  accessToken: string;
+  refreshToken?: string;
+  accountEmail?: string;
+}
+
 export class BambuAuthApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -76,5 +82,15 @@ export const bambuAuth = {
       method: "POST",
     });
     if (!res.ok) throw new BambuAuthApiError(res.status, await extractError(res));
+  },
+
+  async pasteToken(input: PasteTokenInput): Promise<BambuLoginResult> {
+    const res = await fetch(`${apiBase()}/makerworld/auth/paste-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new BambuAuthApiError(res.status, await extractError(res));
+    return res.json();
   },
 };
