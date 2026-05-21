@@ -35,6 +35,11 @@ export default {
         mono: ['"Geist Mono"', "ui-monospace", '"SF Mono"', "Menlo", "monospace"],
       },
       borderRadius: {
+        // Design-system radius scale (alongside Tailwind's built-ins).
+        "design-sm": "6px",
+        design: "10px",
+        "design-lg": "14px",
+        "design-xl": "20px",
         card: "14px",
         pill: "999px",
       },

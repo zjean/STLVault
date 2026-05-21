@@ -148,7 +148,7 @@ const TagDetailView: React.FC<TagDetailViewProps> = ({
           <ChevronLeft size={16} />
           Tags
         </button>
-        <h1 className="text-[17px] md:text-[18px] font-medium -tracking-[0.01em] text-fg truncate">
+        <h1 className="text-[16px] md:text-[22px] font-semibold -tracking-[0.02em] text-fg truncate">
           <span className="text-fg-3 font-mono mr-1">#</span>
           {tagName}
         </h1>

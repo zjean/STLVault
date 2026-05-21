@@ -84,7 +84,7 @@ const TagsView: React.FC<TagsViewProps> = ({
           <ChevronLeft size={16} />
           Library
         </button>
-        <h1 className="text-[17px] md:text-[18px] font-medium -tracking-[0.01em] text-fg">
+        <h1 className="text-[16px] md:text-[22px] font-semibold -tracking-[0.02em] text-fg">
           Tags
         </h1>
       </header>
