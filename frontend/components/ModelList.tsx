@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { STLModel, Folder } from "../types";
 import { api } from "../services/api";
+import ContextMenu, { ContextMenuEntry } from "./ContextMenu";
 
 interface ModelListProps {
   models: STLModel[];
@@ -111,6 +112,62 @@ const ModelList: React.FC<ModelListProps> = ({
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    model: STLModel;
+  } | null>(null);
+
+  const openContextMenu = (e: React.MouseEvent, model: STLModel) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, model });
+  };
+
+  const buildMenuItems = (model: STLModel): ContextMenuEntry[] => {
+    const isSelected = selectedIds.has(model.id);
+    return [
+      {
+        label: "Open",
+        icon: <ExternalLink size={14} />,
+        onSelect: () => onSelectModel(model),
+      },
+      {
+        label: isSelected ? "Unselect" : "Select",
+        icon: isSelected ? (
+          <CheckSquare size={14} />
+        ) : (
+          <Square size={14} />
+        ),
+        onSelect: () => onToggleSelection(model.id),
+      },
+      { divider: true },
+      {
+        label: "Download",
+        icon: <Download size={14} />,
+        onSelect: () => {
+          const a = document.createElement("a");
+          a.href = api.getDownloadUrl(model);
+          a.rel = "noopener";
+          a.click();
+        },
+      },
+      {
+        label: "Open in slicer",
+        icon: <ExternalLink size={14} />,
+        onSelect: () => {
+          window.location.href = api.getSlicerUrl(model);
+        },
+      },
+      { divider: true },
+      {
+        label: "Delete",
+        icon: <Trash2 size={14} />,
+        danger: true,
+        onSelect: () => onDelete(model.id),
+      },
+    ];
+  };
 
   useEffect(() => {
     if (initialSearch) {
@@ -526,6 +583,7 @@ const ModelList: React.FC<ModelListProps> = ({
                     onToggleSelection={() => onToggleSelection(model.id)}
                     onDelete={() => onDelete(model.id)}
                     onDragStart={(e) => handleCardDragStart(e, model.id)}
+                    onContextMenu={(e) => openContextMenu(e, model)}
                   />
                 );
               })}
@@ -595,6 +653,7 @@ const ModelList: React.FC<ModelListProps> = ({
                     onToggleSelection={() => onToggleSelection(model.id)}
                     onDelete={() => onDelete(model.id)}
                     onDragStart={(e) => handleCardDragStart(e, model.id)}
+                    onContextMenu={(e) => openContextMenu(e, model)}
                   />
                 );
               })}
@@ -619,6 +678,15 @@ const ModelList: React.FC<ModelListProps> = ({
           </div>
         </div>
       )}
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildMenuItems(contextMenu.model)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 };
@@ -634,6 +702,7 @@ interface CardProps {
   onToggleSelection: () => void;
   onDelete: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }
 
 const ModelCardGrid: React.FC<CardProps> = ({
@@ -647,6 +716,7 @@ const ModelCardGrid: React.FC<CardProps> = ({
   onToggleSelection,
   onDelete,
   onDragStart,
+  onContextMenu,
 }) => {
   const ext = extOf(model.name);
   return (
@@ -656,6 +726,7 @@ const ModelCardGrid: React.FC<CardProps> = ({
       draggable
       onDragStart={onDragStart}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -836,6 +907,7 @@ const ModelCardList: React.FC<CardProps> = ({
   onToggleSelection,
   onDelete,
   onDragStart,
+  onContextMenu,
 }) => {
   const ext = extOf(model.name);
   return (
@@ -845,6 +917,7 @@ const ModelCardList: React.FC<CardProps> = ({
       draggable
       onDragStart={onDragStart}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
