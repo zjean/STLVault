@@ -26,6 +26,8 @@ interface ModelListProps {
   models: STLModel[];
   folders: Folder[];
   currentFolderName: string;
+  initialSearch?: string;
+  onSearchConsumed?: () => void;
   onBackNavigation: () => void;
   onUpload: (files: FileList) => void;
   onImport: () => void;
@@ -84,6 +86,8 @@ const ModelList: React.FC<ModelListProps> = ({
   models,
   folders,
   currentFolderName,
+  initialSearch,
+  onSearchConsumed,
   onBackNavigation,
   onUpload,
   onImport,
@@ -102,11 +106,18 @@ const ModelList: React.FC<ModelListProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialSearch ?? "");
   const [sortBy, setSortBy] = useState<SortOption>("date-desc");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSearch) {
+      setSearchQuery(initialSearch);
+      onSearchConsumed?.();
+    }
+  }, [initialSearch, onSearchConsumed]);
 
   useEffect(() => {
     if (!openMenuId) return;

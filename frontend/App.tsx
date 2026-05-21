@@ -5,6 +5,8 @@ import ModelList from "./components/ModelList";
 import DetailPanel from "./components/DetailPanel";
 import Settings from "./components/Settings";
 import RecentView from "./components/RecentView";
+import TagsView from "./components/TagsView";
+import TagDetailView from "./components/TagDetailView";
 import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
@@ -98,6 +100,13 @@ const App = () => {
   const navigate = useNavigate();
   const showSettings = location.pathname === "/settings";
   const showRecent = location.pathname === "/recent";
+  const showTags = location.pathname === "/tags";
+  const tagDetailMatch = location.pathname.match(/^\/tags\/(.+)$/);
+  const showTagDetail = !!tagDetailMatch;
+  const currentTagName = tagDetailMatch
+    ? decodeURIComponent(tagDetailMatch[1])
+    : null;
+  const [librarySearchSeed, setLibrarySearchSeed] = useState("");
   const openSettings = () => navigate("/settings");
   const closeSettings = () => navigate("/");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -780,6 +789,46 @@ const App = () => {
               navigate("/");
             }}
           />
+        ) : showTags ? (
+          <TagsView
+            models={models}
+            onBack={closeSettings}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
+          />
+        ) : showTagDetail && currentTagName ? (
+          <TagDetailView
+            models={models}
+            tagName={currentTagName}
+            onBack={() => navigate("/tags")}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
+            onOpenModel={(m) => {
+              setCurrentFolderId(m.folderId);
+              setSelectedModelId(m.id);
+              navigate("/");
+            }}
+            onOpenInLibrary={(tag) => {
+              setCurrentFolderId("all");
+              setSelectedModelId(null);
+              setLibrarySearchSeed(tag);
+              navigate("/");
+            }}
+            onRenameTag={async (oldTag, newTag) => {
+              const affected = models.filter((m) => m.tags.includes(oldTag));
+              await Promise.all(
+                affected.map((m) => {
+                  const next = m.tags.filter((t) => t !== oldTag);
+                  if (!next.includes(newTag)) next.push(newTag);
+                  return api.updateModel(m.id, { tags: next });
+                }),
+              );
+              const fresh = await api.getModels("all");
+              setModels(fresh);
+            }}
+          />
         ) : (
           <>
             <main className="flex-1 flex overflow-hidden relative">
@@ -795,6 +844,8 @@ const App = () => {
                   models={filteredModels}
                   folders={filteredFolders}
                   currentFolderName={currentFolderName}
+                  initialSearch={librarySearchSeed}
+                  onSearchConsumed={() => setLibrarySearchSeed("")}
                   onBackNavigation={() => {
                     setCurrentFolderId(currentFolderParentId);
                   }}
