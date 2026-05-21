@@ -288,14 +288,14 @@ const Viewer3D: React.FC<Viewer3DProps> = ({
 
   if (!url)
     return (
-      <div className="flex items-center justify-center h-full text-slate-500">
+      <div className="flex items-center justify-center h-full text-fg-3">
         No model selected
       </div>
     );
 
   if (unsupportedFormat) {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-vault-800 text-slate-400 text-center">
+      <div className="flex flex-col items-center justify-center h-full bg-surface text-fg-3 text-center">
         <img className="object-cover h-full" src={thumbnail}></img>
       </div>
     );
@@ -380,7 +380,7 @@ const Viewer3D: React.FC<Viewer3DProps> = ({
           {orbitMode ? <Rotate3d /> : <Orbit />}
         </button>
       </div>
-      <div className="absolute bottom-4 right-4 bg-black/50 px-3 py-1 rounded text-xs text-slate-300 pointer-events-none">
+      <div className="absolute bottom-4 right-4 bg-black/50 px-3 py-1 rounded text-xs text-fg-2 pointer-events-none">
         LMB: Rotate | RMB: Pan | Scroll: Zoom
       </div>
       {editing ? (
