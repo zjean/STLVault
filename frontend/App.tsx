@@ -7,6 +7,7 @@ import Settings from "./components/Settings";
 import RecentView from "./components/RecentView";
 import TagsView from "./components/TagsView";
 import TagDetailView from "./components/TagDetailView";
+import Dialog from "./components/Dialog";
 import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
@@ -333,8 +334,8 @@ const App = () => {
     // We want to show the modal to let user pick a folder and add tags
     if (!specificFolderId && currentFolderId === "all") {
       setPendingFiles(files);
-      // Default to first folder if available
-      setUploadFolderId(folders.length > 0 ? folders[0].id : "");
+      // Default to first folder if available; otherwise root ("all").
+      setUploadFolderId(folders.length > 0 ? folders[0].id : "all");
       setUploadTags("");
       setShowUploadModal(true);
       return;
@@ -369,9 +370,11 @@ const App = () => {
     setImportUrl("");
     setSelectedOptions(new Set());
     setModelsOptions([]);
-    // Pre-select current folder if specific, otherwise first available
+    // Pre-select current folder if specific; otherwise first folder, else root.
     setImportFolderId(
-      currentFolderId !== "all" ? currentFolderId : folders[0]?.id || "",
+      currentFolderId !== "all"
+        ? currentFolderId
+        : folders[0]?.id || "all",
     );
     setShowImportModal(true);
   };
@@ -968,220 +971,151 @@ const App = () => {
 
               {/* Upload Modal */}
               {showUploadModal && (
-                <div
-                  className={`fixed left-0 top-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
-                  }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                <Dialog
+                  onClose={() => setShowUploadModal(false)}
+                  title="Upload files"
+                  icon={<FileUp size={16} />}
                 >
-                  <div
-                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
-                    style={{
-                      maxHeight: Math.max(
-                        240,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <FileUp className="w-5 h-5 text-accent" /> Upload
-                        Files
-                      </h3>
-                      <button
-                        onClick={() => setShowUploadModal(false)}
-                        className="text-fg-3 hover:text-fg"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
+                  <form onSubmit={handleConfirmUpload} className="px-5 py-5">
+                    <div className="mb-4 px-3.5 py-2.5 rounded-lg bg-bg-3 border border-border-soft">
+                      <p className="text-[13px] text-fg font-medium">
+                        {pendingFiles.length}{" "}
+                        {pendingFiles.length === 1 ? "file" : "files"} selected
+                      </p>
+                      <p className="text-[11.5px] text-fg-3 truncate mt-0.5 font-mono">
+                        {pendingFiles.map((f) => f.name).join(", ")}
+                      </p>
                     </div>
 
-                    <form onSubmit={handleConfirmUpload}>
-                      <div className="mb-4 p-3 bg-bg-2/50 rounded-lg border border-border-soft">
-                        <p className="text-sm text-fg-2 font-medium">
-                          {pendingFiles.length} files selected
-                        </p>
-                        <p className="text-xs text-fg-3 truncate mt-1">
-                          {pendingFiles.map((f) => f.name).join(", ")}
-                        </p>
-                      </div>
-
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-fg-3 mb-1">
-                          Destination Folder
-                        </label>
-                        <select
-                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none"
-                          value={uploadFolderId}
-                          onChange={(e) => setUploadFolderId(e.target.value)}
-                        >
-                          <option value="" disabled>
-                            Select a folder...
+                    <label className="block mb-4">
+                      <span className="block text-[12.5px] text-fg-3 mb-1.5">
+                        Destination folder
+                      </span>
+                      <select
+                        className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg focus:border-accent outline-none transition-colors"
+                        value={uploadFolderId}
+                        onChange={(e) => setUploadFolderId(e.target.value)}
+                      >
+                        <option value="all">All Models (root)</option>
+                        {folders.map((folder) => (
+                          <option key={folder.id} value={folder.id}>
+                            {folder.name}
                           </option>
-                          {folders.map((folder) => (
-                            <option key={folder.id} value={folder.id}>
-                              {folder.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                        ))}
+                      </select>
+                    </label>
 
-                      <div className="mb-6">
-                        <label className="block text-sm font-medium text-fg-3 mb-1">
-                          Add Tags (Optional)
-                        </label>
-                        <input
-                          type="text"
-                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none placeholder:text-fg-3"
-                          placeholder="scifi, armor, weapon..."
-                          value={uploadTags}
-                          onChange={(e) => setUploadTags(e.target.value)}
-                        />
-                        <p className="text-xs text-fg-3 mt-1">
-                          Separate tags with commas
-                        </p>
-                      </div>
+                    <label className="block mb-5">
+                      <span className="block text-[12.5px] text-fg-3 mb-1.5">
+                        Tags (optional)
+                      </span>
+                      <input
+                        type="text"
+                        className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg placeholder:text-fg-3 focus:border-accent outline-none transition-colors"
+                        placeholder="scifi, armor, weapon…"
+                        value={uploadTags}
+                        onChange={(e) => setUploadTags(e.target.value)}
+                      />
+                      <p className="text-[11.5px] text-fg-3 mt-1.5">
+                        Separate tags with commas.
+                      </p>
+                    </label>
 
-                      <div className="flex gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowUploadModal(false)}
-                          className="flex-1 py-2 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={!uploadFolderId}
-                          className="flex-1 py-2 rounded-lg bg-accent hover:brightness-105 text-accent-fg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Upload
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setShowUploadModal(false)}
+                        className="px-3.5 py-1.5 rounded-md border border-border-soft text-fg-2 text-[13px] hover:bg-bg-3 hover:text-fg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!uploadFolderId}
+                        className="px-3.5 py-1.5 rounded-md bg-accent text-accent-fg text-[13px] font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                      >
+                        Upload
+                      </button>
+                    </div>
+                  </form>
+                </Dialog>
               )}
 
               {/* Import URL Modal */}
               {showImportModal && (
-                <div
-                  className={`fixed left-0 top-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
-                  }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                <Dialog
+                  onClose={() => setShowImportModal(false)}
+                  title="Import from URL"
+                  icon={<Globe size={16} />}
                 >
-                  <div
-                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
-                    style={{
-                      maxHeight: Math.max(
-                        240,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <Globe className="w-5 h-5 text-accent" /> Import
-                        from URL
-                      </h3>
-                      <button
-                        onClick={() => setShowImportModal(false)}
-                        className="text-fg-3 hover:text-fg"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
+                  <form onSubmit={handleImportSubmit} className="px-5 py-5">
+                    <label className="block mb-4">
+                      <span className="block text-[12.5px] text-fg-3 mb-1.5">
+                        Model URL
+                      </span>
+                      <input
+                        autoFocus
+                        type="url"
+                        required
+                        className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg placeholder:text-fg-3 focus:border-accent outline-none transition-colors"
+                        placeholder="https://www.printables.com/model/… or https://makerworld.com/en/models/…"
+                        value={importUrl}
+                        onChange={(e) => setImportUrl(e.target.value)}
+                      />
+                      <p className="text-[11.5px] text-fg-3 mt-1.5">
+                        Paste a link from Printables or Makerworld. Makerworld
+                        downloads require a Bambu Cloud sign-in in Settings.
+                      </p>
+                    </label>
 
-                    <form onSubmit={handleImportSubmit}>
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-fg-3 mb-1">
-                          Model URL
-                        </label>
-                        <input
-                          autoFocus
-                          type="url"
-                          required
-                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none placeholder:text-fg-3"
-                          placeholder="https://www.printables.com/model/... or https://makerworld.com/en/models/..."
-                          value={importUrl}
-                          onChange={(e) => setImportUrl(e.target.value)}
-                        />
-                        <p className="text-xs text-fg-3 mt-1">
-                          Paste a link from Printables or Makerworld. Makerworld
-                          downloads require a Bambu Cloud sign-in in Settings.
+                    {bambuAuthExpired && (
+                      <div className="mb-4 px-3.5 py-2.5 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger text-[12.5px]">
+                        <p className="font-semibold text-fg mb-0.5">
+                          Bambu Cloud sign-in required
+                        </p>
+                        <p className="text-fg-2">
+                          Open Settings → Bambu Cloud and sign in (or
+                          re-sign-in) to import from Makerworld.
                         </p>
                       </div>
+                    )}
 
-                      {bambuAuthExpired && (
-                        <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-200">
-                          <p className="font-semibold mb-1">
-                            Bambu Cloud sign-in required
-                          </p>
-                          <p className="text-red-300/90">
-                            Open Settings &rarr; Bambu Cloud and sign in (or
-                            re-sign-in) to import from Makerworld.
-                          </p>
-                        </div>
-                      )}
-
-                      <div className="mb-6">
-                        <label className="block text-sm font-medium text-fg-3 mb-1">
-                          Destination Folder
-                        </label>
-                        <select
-                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none"
-                          value={importFolderId}
-                          onChange={(e) => setImportFolderId(e.target.value)}
-                        >
-                          <option value="" disabled>
-                            Select a folder...
+                    <label className="block mb-5">
+                      <span className="block text-[12.5px] text-fg-3 mb-1.5">
+                        Destination folder
+                      </span>
+                      <select
+                        className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg focus:border-accent outline-none transition-colors"
+                        value={importFolderId}
+                        onChange={(e) => setImportFolderId(e.target.value)}
+                      >
+                        <option value="all">All Models (root)</option>
+                        {folders.map((folder) => (
+                          <option key={folder.id} value={folder.id}>
+                            {folder.name}
                           </option>
-                          {folders.map((folder) => (
-                            <option key={folder.id} value={folder.id}>
-                              {folder.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                        ))}
+                      </select>
+                    </label>
 
-                      <div className="flex gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowImportModal(false)}
-                          className="flex-1 py-2 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={!importUrl || !importFolderId}
-                          className="flex-1 py-2 rounded-lg bg-accent hover:brightness-105 text-accent-fg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Import
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setShowImportModal(false)}
+                        className="px-3.5 py-1.5 rounded-md border border-border-soft text-fg-2 text-[13px] hover:bg-bg-3 hover:text-fg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!importUrl || !importFolderId}
+                        className="px-3.5 py-1.5 rounded-md bg-accent text-accent-fg text-[13px] font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                      >
+                        Import
+                      </button>
+                    </div>
+                  </form>
+                </Dialog>
               )}
 
               {/* Import Options Modal */}
@@ -1302,187 +1236,134 @@ const App = () => {
 
               {/* Delete Confirmation Modal */}
               {deleteConfirmState.isOpen && (
-                <div
-                  className={`fixed left-0 top-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
-                  }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                <Dialog
+                  onClose={() =>
+                    setDeleteConfirmState((prev) => ({
+                      ...prev,
+                      isOpen: false,
+                    }))
+                  }
+                  title="Confirm deletion"
+                  icon={<AlertTriangle size={16} className="text-danger" />}
                 >
-                  <div
-                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
-                    style={{
-                      maxHeight: Math.max(
-                        240,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="flex flex-col items-center text-center mb-6">
-                      <div className="w-12 h-12 bg-red-900/30 rounded-full flex items-center justify-center mb-4">
-                        <AlertTriangle className="w-6 h-6 text-red-500" />
+                  <div className="px-5 py-5">
+                    <div className="flex items-start gap-3 mb-5">
+                      <div
+                        className="w-10 h-10 rounded-full grid place-items-center bg-danger-soft shrink-0"
+                        aria-hidden
+                      >
+                        <AlertTriangle size={18} className="text-danger" />
                       </div>
-                      <h3 className="text-xl font-bold text-white mb-2">
-                        Confirm Deletion
-                      </h3>
-                      <p className="text-fg-3 text-sm">
+                      <p className="text-[13.5px] text-fg-2 leading-relaxed">
                         {deleteConfirmState.type === "single" &&
-                          "Are you sure you want to delete this model? This action cannot be undone."}
+                          "Delete this model? This can't be undone."}
                         {deleteConfirmState.type === "bulk" &&
-                          `Are you sure you want to delete ${selectedIds.size} models? This action cannot be undone.`}
+                          `Delete ${selectedIds.size} ${
+                            selectedIds.size === 1 ? "model" : "models"
+                          }? This can't be undone.`}
                         {deleteConfirmState.type === "folder" &&
-                          "Are you sure you want to delete this folder?"}
+                          "Delete this folder?"}
                       </p>
                     </div>
 
-                    <div className="flex gap-3">
+                    <div className="flex gap-2 justify-end">
                       <button
+                        type="button"
                         onClick={() =>
                           setDeleteConfirmState((prev) => ({
                             ...prev,
                             isOpen: false,
                           }))
                         }
-                        className="flex-1 py-2.5 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
+                        className="px-3.5 py-1.5 rounded-md border border-border-soft text-fg-2 text-[13px] hover:bg-bg-3 hover:text-fg transition-colors"
                       >
                         Cancel
                       </button>
                       <button
+                        type="button"
                         onClick={executeDelete}
-                        className="flex-1 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                        className="px-3.5 py-1.5 rounded-md bg-danger text-white text-[13px] font-medium hover:opacity-90 transition-opacity"
                       >
                         Delete
                       </button>
                     </div>
                   </div>
-                </div>
+                </Dialog>
               )}
 
               {showMoveModal && (
-                <div
-                  className={`fixed left-0 top-0 z-50 bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
+                <Dialog
+                  onClose={() => setShowMoveModal(false)}
+                  title={`Move ${selectedIds.size} ${
+                    selectedIds.size === 1 ? "model" : "models"
                   }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                  icon={<FolderInput size={16} />}
                 >
-                  <div
-                    className="bg-surface border border-border rounded-xl p-6 w-80 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
-                    style={{
-                      maxHeight: Math.max(
-                        200,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-bold text-white flex items-center gap-2">
-                        <FolderInput className="w-4 h-4" /> Move to Folder
-                      </h3>
-                      <button
-                        onClick={() => setShowMoveModal(false)}
-                        className="text-fg-3 hover:text-fg"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <div className="space-y-2 max-h-64 overflow-y-auto mb-4">
-                      {folders.map((folder) => (
-                        <button
-                          key={folder.id}
-                          onClick={() => handleBulkMoveSubmit(folder.id)}
-                          className="w-full text-left px-3 py-2 rounded hover:bg-bg-3 text-fg-2 hover:text-fg text-sm transition-colors"
-                        >
-                          {folder.name}
-                        </button>
-                      ))}
-                    </div>
+                  <div className="px-5 py-4">
+                    {folders.length === 0 ? (
+                      <div className="text-[13px] text-fg-3 text-center py-6">
+                        No folders yet. Create one in the sidebar first.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        {folders.map((folder) => (
+                          <button
+                            key={folder.id}
+                            type="button"
+                            onClick={() => handleBulkMoveSubmit(folder.id)}
+                            className="w-full text-left px-3 py-2 rounded-md border border-transparent hover:border-border-soft hover:bg-bg-3 text-[13px] text-fg-2 hover:text-fg transition-colors"
+                          >
+                            {folder.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
+                </Dialog>
               )}
 
               {showTagModal && (
-                <div
-                  className={`fixed left-0 top-0 z-50 bg-black/60 backdrop-blur-sm flex justify-center p-4 ${
-                    visualViewport.keyboardOpen ? "items-start" : "items-center"
+                <Dialog
+                  onClose={() => setShowTagModal(false)}
+                  title={`Add tags to ${selectedIds.size} ${
+                    selectedIds.size === 1 ? "model" : "models"
                   }`}
-                  style={{
-                    width: "100%",
-                    height:
-                      visualViewport.height ||
-                      (typeof window !== "undefined" ? window.innerHeight : 0),
-                    transform: `translate(${visualViewport.offsetLeft}px, ${visualViewport.offsetTop}px)`,
-                  }}
+                  icon={<Tags size={16} />}
                 >
-                  <div
-                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
-                    style={{
-                      maxHeight: Math.max(
-                        240,
-                        (visualViewport.height ||
-                          (typeof window !== "undefined"
-                            ? window.innerHeight
-                            : 0)) - 32,
-                      ),
-                    }}
-                  >
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-bold text-white flex items-center gap-2">
-                        <Tags className="w-4 h-4" /> Add Tags
-                      </h3>
-                      <button
-                        onClick={() => setShowTagModal(false)}
-                        className="text-fg-3 hover:text-fg"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <form onSubmit={handleBulkTagSubmit}>
-                      <p className="text-sm text-fg-3 mb-2">
-                        Add tags to {selectedIds.size} items (comma separated):
-                      </p>
+                  <form onSubmit={handleBulkTagSubmit} className="px-5 py-5">
+                    <label className="block mb-5">
+                      <span className="block text-[12.5px] text-fg-3 mb-1.5">
+                        Tags
+                      </span>
                       <input
                         autoFocus
                         type="text"
-                        className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none mb-4"
-                        placeholder="scifi, armor, weapon..."
+                        className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg placeholder:text-fg-3 focus:border-accent outline-none transition-colors"
+                        placeholder="scifi, armor, weapon…"
                         value={bulkTags}
                         onChange={(e) => setBulkTags(e.target.value)}
                       />
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowTagModal(false)}
-                          className="px-3 py-1.5 text-sm text-fg-2 hover:text-fg"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          className="px-3 py-1.5 text-sm bg-accent hover:brightness-105 text-accent-fg rounded"
-                        >
-                          Add Tags
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+                      <p className="text-[11.5px] text-fg-3 mt-1.5">
+                        Separate tags with commas.
+                      </p>
+                    </label>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowTagModal(false)}
+                        className="px-3.5 py-1.5 rounded-md border border-border-soft text-fg-2 text-[13px] hover:bg-bg-3 hover:text-fg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3.5 py-1.5 rounded-md bg-accent text-accent-fg text-[13px] font-medium hover:opacity-90 transition-opacity"
+                      >
+                        Add tags
+                      </button>
+                    </div>
+                  </form>
+                </Dialog>
               )}
             </main>
           </>
