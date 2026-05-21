@@ -31,13 +31,13 @@ A second string returned alongside the access token at login. *In theory*: trade
 A 6-digit one-time code that Bambu emails to the user as a mandatory second factor on every login attempt. Issued by `POST /v1/user-service/user/sendemailcode` (path TBD on first probe), consumed by `POST /v1/user-service/user/login` alongside the email address. Bambu enforces 2FA for all accounts now, so **every fresh login requires the user to fetch this code from their inbox and type it in** — no service-account or app-password equivalent exists. *Atom*: a short-lived, user-visible challenge that gates token minting. Implication: token rotation cannot be silent; every ~90 days the user does an in-app sign-in dance.
 
 **Cloudflare browser challenge**
-A defensive layer in front of `makerworld.com` (the HTML site) that returns HTTP 403 with `cf-mitigated: challenge` unless the requesting client passes an interactive JavaScript challenge. *Atom*: a wall that only a real headless-or-headed browser can climb; plain `requests.Session` cannot. **Critical**: `api.bambulab.com` (a different host) is **not behind this wall**, so calling the JSON API directly is the route in — no scraping needed.
+A defensive layer in front of `makerworld.com` (the HTML site) that returns HTTP 403 with `cf-mitigated: challenge` unless the requesting client passes an interactive JavaScript challenge. *Atom*: a wall that only a real browser running JavaScript can pass through; plain `requests.Session` (no JS engine) cannot. **Critical**: `api.bambulab.com` (a different host) is **not behind this wall**, so calling the JSON API directly is the route in — no scraping needed.
 
 **Presigned S3 URL**
 A short-lived (~5 min) HTTPS URL hosted on `s3.<region>.amazonaws.com` whose query string embeds a cryptographic signature. The signature is computed over the exact bytes of the URL; any re-encoding of the query string invalidates it. *Atom*: a single-use download token bound to a specific S3 object and a specific expiry time.
 
 **Importer (server-side class)**
-Mirrors the role of `PrintablesImporter`: an object with two responsibilities called from two HTTP routes — *discover options* (list a model's files) and *fetch one file* (download bytes for a chosen file). Wraps a `requests.Session` for connection reuse, not for cookie/auth state — the auth state is the static bearer token, not session-derived.
+Mirrors the role of `PrintablesImporter`: an object with two responsibilities called from two HTTP routes — *discover options* (list a model's files) and *fetch one file* (download bytes for a chosen file). Wraps a `requests.Session` for connection reuse only. The importer holds **no auth state itself** — it calls `bambu_auth.get_valid_access_token()` at the start of every authenticated request, so the source of truth for the token is always the credentials row in the DB, not a field on the importer instance.
 
 **Two-step import flow**
 Same shape as Printables: paste URL → backend returns options → user picks → backend downloads each pick → each becomes one row in `models`. The UX modal in `App.tsx` is already this shape; the Makerworld importer slots in behind it via host-based routing.
@@ -47,7 +47,7 @@ Same shape as Printables: paste URL → backend returns options → user picks �
 ### Implementation
 
 **Custom-`*` isolation (fork convention)**
-Additions live under `backend/custom_*/` (Python module naming uses underscores) and `frontend/{components,services,hooks}/custom-*` (TS uses kebab-case). In-place edits to upstream files are `mod(...)` commits and the diff surface is the conflict tax on upstream sync. The plan minimises `mod(...)` to two trivial wire-up edits (one each in `backend/app.py` and `frontend/App.tsx`).
+Additions live under `backend/custom_*/` (Python module naming uses underscores) and `frontend/{components,services,hooks}/custom-*` (TS uses kebab-case). In-place edits to upstream files are `mod(...)` commits and the diff surface is the conflict tax on upstream sync. The plan keeps `mod(...)` edits small and inclusion-only — wire-ups in `backend/app.py` (~5-6 lines), `frontend/App.tsx` (~10 lines), `frontend/components/Settings.tsx` (~3 lines), and `README.md` (one new section). None of these touch upstream business logic; they're just include-points for fork-only code.
 
 **Host-based dispatch**
 A function on the frontend that picks which backend endpoint to call based on the hostname in the pasted URL. Atom: `new URL(u).hostname.includes('makerworld') ? makerworldApi.options(u) : api.retrieveModelOptions(u)`.
@@ -138,16 +138,27 @@ Schema (created idempotently on backend startup, mirroring the existing `CREATE 
 ```sql
 CREATE TABLE IF NOT EXISTS custom_bambu_credentials (
   id                  INTEGER PRIMARY KEY CHECK (id = 1),
-  account_email       TEXT,           -- displayed in Settings as "Signed in as ..."
+  account_email       TEXT,           -- whatever the user typed at sign-in; NOT
+                                      -- a Bambu-confirmed canonical address
+                                      -- (the login response doesn't include one),
+                                      -- so use only for display in Settings,
+                                      -- never as an authoritative identity.
   access_token        TEXT NOT NULL,
-  refresh_token       TEXT NOT NULL,
-  access_expires_at   INTEGER NOT NULL,  -- unix milliseconds
-  refresh_expires_at  INTEGER,           -- unix milliseconds, nullable (login response sometimes omits)
+  refresh_token       TEXT,           -- nullable until confirmed otherwise: Doridian
+                                      -- docs say it's always present and "equals
+                                      -- accessToken in all known cases" but the field
+                                      -- is unverified live. Live-probe the login
+                                      -- response in step 5 — if it's reliably non-null,
+                                      -- tighten this constraint in a follow-up.
+  access_expires_at   INTEGER NOT NULL,  -- unix milliseconds; computed as
+                                      -- now_ms() + login.expiresIn * 1000.
   updated_at          INTEGER NOT NULL
 );
 ```
 
 `CHECK (id = 1)` makes the table single-row by construction — `INSERT OR REPLACE INTO custom_bambu_credentials(id, ...) VALUES (1, ...)` is the only write pattern.
+
+**No `refresh_expires_at` column.** The Bambu login response (per Doridian) returns only one `expiresIn`, not a separate `refreshExpiresIn`, so we have no first-class signal for refresh-token expiry. The rotation logic doesn't need one either — `try_refresh` will 401 whether the refresh has expired or the endpoint itself is dead, and both outcomes route to the same re-login flow. If Bambu's response shape ever grows a `refreshExpiresIn` field, add the column and short-circuit `try_refresh` when it's past — but until then, storing it would be speculative.
 
 **Why DB and not env:**
 
@@ -168,6 +179,13 @@ CREATE TABLE IF NOT EXISTS custom_bambu_credentials (
 7. Settings page reflects "Signed in as &lt;email&gt;, expires &lt;date&gt;" + a "Sign out" button.
 
 Step 4–6 happen identically when the user is re-authing after an `expired` state — same UI surface, same backend routes. The credentials row gets `INSERT OR REPLACE`'d.
+
+**Failure-path UX** (step 3 and 5 both fail open to friendly errors):
+
+- **Send-code returns 200 but no email arrives.** Most likely cause: the email was typo'd (Bambu's API is expected to return 200 even for unknown accounts to avoid leaking which addresses are registered — typical anti-enumeration defence). The "code sent" panel shows a *"Didn't receive a code in 1 minute?"* link that resets the panel back to the email input. We do **not** auto-resend; the user has to re-confirm the address.
+- **Send-code returns 4xx.** Likely rate-limit (Bambu throttles, exact thresholds unknown). Surface the upstream error message verbatim and add a one-liner: *"Bambu Cloud rate-limits sign-in. Wait ~10 minutes and try again."* Don't burn API quota on retry loops.
+- **Login returns 4xx.** Either wrong code (most common), expired code, or rate-limit. Distinguish in copy if the upstream error message is informative; otherwise show *"Code didn't work — request a new one and try again."* The panel resets to the code-entry state with the email pre-filled, no need to re-type it.
+- **`account_email` is what the user typed, not what Bambu confirmed.** The login response gives us tokens but not a canonical email back. Display it as-is in *"Signed in as &lt;email&gt;"* but recognise it's an unverified label — if the user typo'd their address and the login somehow still worked (it won't, but in principle), the displayed identity could mislead.
 
 ### File layout
 
@@ -192,14 +210,22 @@ backend/
 
 frontend/
   services/
+    custom-bambu/
+      auth.ts                      (new — typed client for /api/makerworld/auth/*
+                                          routes. Lives under custom-bambu/, not
+                                          custom-importers/, because Bambu auth is
+                                          a prerequisite for *any* Bambu-API feature,
+                                          not specifically for imports.)
     custom-importers/
-      makerworld.ts                (new — typed client for /api/makerworld routes)
-      bambu-auth.ts                (new — typed client for /api/makerworld/auth routes)
+      makerworld.ts                (new — typed client for /api/makerworld
+                                          options + importid routes)
       index.ts                     (new — host-based dispatch helper)
   components/
-    custom-makerworld/
-      BambuCloudSettings.tsx       (new — sign-in form + status + sign-out button)
-  Settings.tsx                     (mod: include <BambuCloudSettings/> at bottom)
+    custom-bambu/
+      CloudSettings.tsx            (new — sign-in form + status + sign-out button.
+                                          Lives under custom-bambu/ for the same
+                                          reason as services/custom-bambu/auth.ts.)
+  Settings.tsx                     (mod: include <CloudSettings/> at bottom)
   App.tsx                          (mod: dispatch through host-aware helper,
                                           show "re-auth required" banner on 401)
 
@@ -216,7 +242,7 @@ The order matters: each step is independently verifiable before going on to the 
 
 1. **Backend skeleton** — create the three empty packages (`custom_importers/`, `custom_auth/`, `custom_routes/`) with `__init__.py`. No business logic yet. Commit: `feat(makerworld): scaffold custom importer/auth/router packages`.
 
-2. **Credentials schema + CRUD** — `backend/custom_auth/schema.py` defines `ensure_bambu_credentials_table(conn)` (the `CREATE TABLE IF NOT EXISTS` from the section above). `backend/custom_auth/bambu_credentials.py` exposes typed `read() -> Credentials | None`, `upsert(creds)`, `delete()`. Call `ensure_bambu_credentials_table` from `app.py` startup next to wherever the `models` table is created. **Verify**: write a one-shot Python REPL session that calls `upsert` then `read` and gets the right shape back. Commit: `feat(makerworld): credentials table + CRUD for bambu cloud tokens`.
+2. **Credentials schema + CRUD** — `backend/custom_auth/schema.py` defines `ensure_bambu_credentials_table(conn)` (the `CREATE TABLE IF NOT EXISTS` from the section above). `backend/custom_auth/bambu_credentials.py` exposes typed `read() -> Credentials | None`, `upsert(creds)`, `delete()`. *No `app.py` edit yet* — the schema function is just defined and unit-tested here; wiring it into startup happens in step 9 (the dedicated `mod(app)` step). **Verify**: open a Python REPL, manually call `ensure_bambu_credentials_table(sqlite3.connect(':memory:'))` then exercise `upsert` → `read` → `delete` on the same connection and confirm the round-trip shape. Commit: `feat(makerworld): credentials table + CRUD for bambu cloud tokens`.
 
 3. **`MakerworldImporter.getModelOptions(url)` — anonymous half** — same as the previous version of this plan:
    - regex `r'/models/(\d+)'` → designId
@@ -225,7 +251,7 @@ The order matters: each step is independently verifiable before going on to the 
    - **Verify** against the probe's reference design ID `1000000` — confirm a non-empty options list comes back.
    - Commit: `feat(makerworld): list print profiles for a model URL`.
 
-4. **`backend/custom_importers/_persist.py`** — extract `persist_imported_model(...)` from the current `app.py:500-528` Printables persist block. Both the Printables route (eventually, via a follow-up cleanup PR) and the new Makerworld route will call this. Commit: `feat(makerworld): extract shared persist helper for imported models`.
+4. **`backend/custom_importers/_persist.py`** — add a new `persist_imported_model(file_bytes, *, name, folder_id, ext, description, thumbnail) -> dict` helper that mirrors the inline Printables persist block at `app.py:500-528`. The Makerworld route calls this helper; the Printables route still does the work inline. **This is not a refactor of the Printables route** — DRY-ing the Printables route to use the same helper is a separate cleanup PR (out of scope; would require a `mod(app)` to upstream code and is independent of the Makerworld feature). Commit: `feat(makerworld): persist helper for imported models`.
 
 5. **`backend/custom_auth/bambu_auth.py` — auth core** — pure-function module, no FastAPI dependency:
    - `send_code(email)` — POST to Bambu's send-code endpoint (verify the exact path on first live probe — likely `/v1/user-service/user/sendemailcode`; if `/sendemailcode` 404s, fall back to `/sendsmscode` per OpenBambuAPI's path list).
@@ -255,7 +281,7 @@ The order matters: each step is independently verifiable before going on to the 
    - `POST /api/makerworld/importid` — body `{id, name, parentId, previewPath, folderId, typeName}` → `importer.importfromId(...)`, then `persist_imported_model(...)`. Catches `BambuAuthExpiredError` and returns HTTP 401 with `{"error": "bambu_auth_expired"}` so the frontend knows to surface the re-auth banner.
    - Commit: `feat(makerworld): expose /api/makerworld options + import routes`.
 
-9. **`mod(app)` backend wire-up** — three lines added to `backend/app.py`:
+9. **`mod(app)` backend wire-up** — ~5-6 lines added to `backend/app.py` across 2-3 hunks (one import block, one `include_router` block near the existing `app = FastAPI(...)` site, one `ensure_bambu_credentials_table(...)` next to wherever the existing `models` table is created — which the implementer locates by grepping for `CREATE TABLE IF NOT EXISTS models`):
    ```python
    from custom_auth.schema import ensure_bambu_credentials_table
    from custom_routes import makerworld as mw_routes, bambu_auth as mw_auth_routes
@@ -265,20 +291,22 @@ The order matters: each step is independently verifiable before going on to the 
    # ... at startup hook / next to the existing models-table create:
    ensure_bambu_credentials_table(get_db_conn())
    ```
-   Commit: `mod(app): wire makerworld + bambu-auth routers and credentials schema`.
+   Keep these blocks compact (don't intersperse with upstream code) so the conflict surface on upstream-sync stays small. Commit: `mod(app): wire makerworld + bambu-auth routers and credentials schema`.
 
-10. **Frontend auth client** — `frontend/services/custom-importers/bambu-auth.ts` exposes `sendCode(email)`, `login(email, code)`, `getStatus()`, `signOut()`. Plain typed `fetch` wrappers. Commit: `feat(makerworld): frontend client for bambu auth routes`.
+10. **Frontend auth client** — `frontend/services/custom-bambu/auth.ts` exposes `sendCode(email)`, `login(email, code)`, `getStatus()`, `signOut()`. Plain typed `fetch` wrappers. Commit: `feat(bambu): frontend client for bambu cloud auth routes`.
 
-11. **`<BambuCloudSettings/>` component** — `frontend/components/custom-makerworld/BambuCloudSettings.tsx`:
+11. **`<CloudSettings/>` component** — `frontend/components/custom-bambu/CloudSettings.tsx`:
     - On mount: `getStatus()` → renders one of:
       - **Signed out**: email input + "Send code" button.
-      - **Code sent**: 6-digit code input + "Verify" button. Shows the email back to the user. Has a "use a different email" link to reset.
+      - **Code sent**: 6-digit code input + "Verify" button. Shows the email back to the user. Has a *"Didn't receive a code in 1 min?"* link that resets to the signed-out form (per the failure-path UX above).
       - **Signed in**: "Signed in as &lt;email&gt; — expires &lt;date&gt;" + "Sign out" button.
       - **Expired**: red banner "Bambu Cloud sign-in expired — sign in again" + the signed-out form.
-    - Inline plaintext-storage disclosure: "Tokens are stored in `data.db` on this server. Treat that file as sensitive."
-    - Commit: `feat(makerworld): bambu cloud settings component`.
+    - Inline plaintext-storage disclosure: *"Tokens are stored in `data.db` on this server. Treat that file as sensitive."*
+    - Error mapping: send-code 4xx → *"Bambu Cloud rate-limits sign-in. Wait ~10 minutes and try again."*; login 4xx → *"Code didn't work — request a new one."* (preserve upstream error message if more specific).
+    - **No global auth-state store.** Each consumer (this component, the import modal banner) calls `getStatus()` on its own initiative — no React context, no Zustand store, no polling. Keeps it simple for V1; revisit only if multiple consumers start needing the same status simultaneously.
+    - Commit: `feat(bambu): cloud-credentials settings component`.
 
-12. **`mod(Settings)` wire-up** — one import + one `<BambuCloudSettings/>` placement at the bottom of `Settings.tsx`'s existing settings sections. Commit: `mod(settings): include bambu cloud sign-in section`.
+12. **`mod(Settings)` wire-up** — one import + one `<CloudSettings/>` placement at the bottom of `Settings.tsx`'s existing settings sections. ~3 lines of diff. Commit: `mod(settings): include bambu cloud sign-in section`.
 
 13. **Frontend importer client** — `frontend/services/custom-importers/makerworld.ts` mirrors the two Printables methods in `services/api.ts:168-201`, retargeted at `/api/makerworld/...`. Commit: `feat(makerworld): frontend client for makerworld routes`.
 
@@ -290,7 +318,20 @@ The order matters: each step is independently verifiable before going on to the 
     - On import-options/import error response of `{error: "bambu_auth_expired"}`, show a banner with a deep-link to Settings (or just clear copy: "Bambu sign-in expired — open Settings to sign in again").
     Commit: `mod(app): host-aware url import + bambu auth-expired banner`.
 
-16. **README** — add **Importing from Makerworld** section: brief on what's supported (print profiles), step-by-step sign-in walkthrough (with screenshot of the Settings section), note about ~90-day expiry, link to this design doc and to upstream OpenBambuAPI docs. Commit: `docs(readme): document Makerworld import + bambu cloud sign-in`.
+16. **README** — add **Importing from Makerworld** section: brief on what's supported (print profiles), step-by-step sign-in walkthrough (with screenshot of the Settings section — captured during step 11 dev and committed alongside the component, not as a fresh artifact here), note about ~90-day expiry, link to this design doc and to upstream OpenBambuAPI docs. Commit: `docs(readme): document Makerworld import + bambu cloud sign-in`.
+
+### Logging spec
+
+The plan stays single-user and self-hosted, so structured logging or metrics infrastructure is out of scope. But debugging *"why doesn't import work?"* without re-running the manual probe needs a few well-placed `logging.getLogger(__name__).{info,debug,warning}` calls:
+
+- **INFO**, in `bambu_auth`: every state transition observable at the Settings level — `bambu_auth: sign-in succeeded for <email>`, `bambu_auth: sign-out`, `bambu_auth: access token expired, attempting refresh`, `bambu_auth: refresh failed (HTTP <code>); re-login required`.
+- **INFO**, in `custom_routes/makerworld.py`: one line per import — `makerworld: imported profileId=<id> as <filename> (<size> bytes)`. Mirrors the implicit "row inserted into models" event.
+- **DEBUG**, in `bambu_auth.try_refresh`: the full response status + body length on every refresh attempt. The reason: if/when Bambu re-enables `/refreshtoken`, the transition shows up in DEBUG logs without needing to re-read this doc.
+- **WARNING**, in `bambu_auth.login`: when the upstream `/v1/user-service/user/login` returns 4xx, log the upstream error message verbatim. Don't log on 5xx — let the route's exception handler do that, so we don't double-log.
+- **Never log tokens.** `access_token`, `refresh_token`, and the 6-digit verification code are all secrets. The auth-core module should have a one-line `_redact_token(s: str) -> str` helper (e.g. return `f"<token len={len(s)}>"`) used in any log call that touches token-bearing variables. Add a unit test that grep's the log output for `access_token=` patterns and fails if it finds any.
+- **Account email** is borderline-sensitive (it identifies the user to Bambu's API but is also visible in Settings). Log it freely at INFO — it's the only signal that lets the maintainer answer "which account is misbehaving?".
+
+The existing `app.py` uses `uvicorn`'s default log config; the new modules should `import logging; log = logging.getLogger(__name__)` and inherit that config. No new config needed.
 
 ### Branch + PR
 
@@ -320,7 +361,9 @@ The order matters: each step is independently verifiable before going on to the 
 | Bambu re-enables `/refreshtoken` (good problem) | Unknowable but low-probability | Importer attempts it first regardless; the day it starts returning 200, our users get silent rotation. Logs at DEBUG level on every refresh attempt make the transition observable. |
 | Bambu *also* breaks `/login` (catastrophic) | Low | Settings shows a clear error from the upstream response so the user knows it's a Bambu-side problem; the importer continues to handle anonymous metadata so URL-import partially works for the Printables path. No app-level fix possible. |
 | Access token expires and user is mid-import | High eventually (every ~90 days) | Both the `/options` and `/importid` routes return `{"error": "bambu_auth_expired"}`; frontend banner deep-links to Settings; user signs in again with email code; previous in-flight import is retried. No data loss because the persist step happens after the authenticated fetch. |
+| Bambu rate-limits `/sendemailcode` and/or `/login` after a few failed attempts | High during dev iteration; medium for normal users (typos happen) | Settings UI surfaces the upstream 4xx verbatim plus a *"Bambu Cloud rate-limits sign-in — wait ~10 minutes and try again"* hint. **Do not** auto-retry send-code or auto-resend after a no-show email; the user explicitly clicks *"Didn't receive a code"* which only resets the local UI, not the upstream rate-limit window. During implementation: when probing the send-code path, use a personal Bambu account on a fresh email rather than spamming the endpoint from multiple test addresses — burns through the limit fast. |
 | User signs in but the `expiresIn` value drifts (clock skew, Bambu changing units, etc.) | Low | Clock-skew slack is built in (`expires_at > now + 60s` is the "still valid" check). If the value ever comes back in ms instead of s (or vice versa), our wall-clock check catches it during testing. |
+| Account email leaks via `data.db` backups | Medium if the user backs up `data.db` to an external location | The plaintext-storage disclosure in Settings UI says *"tokens are stored in `data.db`"* — extending it to *"…along with the email address you signed in with"* keeps the user informed. No mitigation beyond awareness — encryption-at-rest is explicitly out of scope. |
 | Account email + tokens stored plaintext in `data.db` | Inherent to design | Documented in Settings UI + this doc + README. Self-hosted single-user posture makes the token's trust level equivalent to `data.db` itself. Encryption-at-rest is in the explicit-out-of-scope list. |
 | User pastes a Makerworld URL with no signed-in account | High on first use | Options call succeeds (it's anonymous); import call returns `bambu_auth_expired`; banner sends user to Settings. README's screenshot walks the first-time setup. |
 | S3 presigned URL signature breaks due to redirect/encoding | Medium during initial implementation | Pinned in this doc: `allow_redirects=False`, no `params=`. Verify on first end-to-end test. |
