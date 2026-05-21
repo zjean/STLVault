@@ -101,6 +101,51 @@ The fork extends upstream's Python/FastAPI backend and React/Vite frontend. For 
 
 **When debugging a custom-* feature that doesn't work:** find the upstream module that does the equivalent thing, compare the calls, diff the network request shape if you have DevTools open.
 
+## Running the app locally
+
+Two ways to run STLVault on the dev machine. Pick by what you're iterating on.
+
+### Hot-reload dev (frontend or backend work)
+
+Two terminals, no Docker:
+
+```bash
+# Terminal 1 — backend (FastAPI, uvicorn --reload on :8000)
+cd backend && ./run.sh
+
+# Terminal 2 — frontend (Vite dev server with HMR on :5173)
+cd frontend && npm install && npm run dev
+```
+
+The Vite config (`frontend/vite.config.ts`) baked the literal string `"TERA_API_URL"` into `import.meta.env.VITE_API_URL` so that container builds can sed-replace it at runtime via `frontend/env.sh`. In `npm run dev` that substitution never happens, so the frontend has no idea where the backend is. The escape hatch lives in `frontend/services/api.ts:6` — open the browser DevTools console once and run:
+
+```js
+localStorage.setItem("api-port-override", "http://localhost:8000")
+location.reload()
+```
+
+`api.ts` prefers `api-port-override` over the build-time value, so the dev frontend then talks to the local uvicorn. Setting is per-origin and persists across reloads; clear it with `localStorage.removeItem("api-port-override")`.
+
+Single-user, no auth (see below) — once both servers are up, the app just works.
+
+### Production-style (full stack in containers)
+
+For verifying the actual shipped artifact (no HMR, env-substitution active):
+
+```bash
+docker-compose up -d --build
+# frontend → http://localhost:${APP_PORT}   (default 8999)
+# backend  → http://localhost:${API_PORT}   (default 8998)
+```
+
+Ports + bind paths come from `.env` (committed defaults work for local). This path serves the built Vite bundle, not the dev server — so frontend code changes require a rebuild.
+
+### Notes
+
+- Backend hot-reload is automatic (`uvicorn --reload` in `run.sh`); frontend HMR is automatic (Vite).
+- SQLite DB and uploads live under `backend/data/` and `backend/uploads/` when run locally; under `${DATA_PATH}` / `${UPLOAD_PATH}` when containerized. Don't commit either.
+- The dev-loop-verify skill is the canonical reference for verifying frontend changes in a browser (chrome-devtools MCP, loopback-hijack workaround on macOS).
+
 ## Authentication and authorization
 
 STLVault is currently **single-user, no login flow** (multi-user with authentication is on the upstream roadmap as unchecked). Until that lands:
