@@ -222,35 +222,9 @@ const Sidebar: React.FC<SidebarProps> = ({
       ? Math.min((storageStats.used / storageStats.total) * 100, 100)
       : 0;
 
-  // Inline editor row used for both rename + create
-  const InlineEditor: React.FC<{
-    value: string;
-    placeholder: string;
-    onChange: (v: string) => void;
-    onCommit: () => void;
-    onCancel: () => void;
-    autoFocus?: boolean;
-  }> = ({ value, placeholder, onChange, onCommit, onCancel, autoFocus = true }) => {
-    const ref = useRef<HTMLInputElement>(null);
-    useEffect(() => {
-      if (autoFocus) ref.current?.focus();
-    }, [autoFocus]);
-    return (
-      <input
-        ref={ref}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") onCommit();
-          else if (e.key === "Escape") onCancel();
-        }}
-        onClick={(e) => e.stopPropagation()}
-        className="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-[13px] text-fg outline-none focus:ring-2 focus:ring-accent/30"
-      />
-    );
-  };
+  // InlineEditor moved to module scope — defining it inside the component made
+  // React remount the <input> on every parent render (new function reference
+  // = new component type), which dropped focus mid-typing and broke commit.
 
   const TreeRow: React.FC<{ folder: Folder; depth: number }> = ({ folder, depth }) => {
     const childList = childrenByParent[folder.id] ?? [];
@@ -569,6 +543,35 @@ const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
     </div>
+  );
+};
+
+const InlineEditor: React.FC<{
+  value: string;
+  placeholder: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+  autoFocus?: boolean;
+}> = ({ value, placeholder, onChange, onCommit, onCancel, autoFocus = true }) => {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus();
+  }, [autoFocus]);
+  return (
+    <input
+      ref={ref}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onCommit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onCommit();
+        else if (e.key === "Escape") onCancel();
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-[13px] text-fg outline-none focus:ring-2 focus:ring-accent/30"
+    />
   );
 };
 
