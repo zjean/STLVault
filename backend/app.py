@@ -21,6 +21,13 @@ from pydantic import BaseModel
 
 from importers import printables
 
+# fork-only: makerworld importer + bambu cloud auth
+from custom_auth.schema import ensure_bambu_credentials_table
+from custom_routes import (
+    bambu_auth as mw_auth_routes,
+    makerworld as mw_routes,
+)
+
 DB_PATH = os.getenv("DB_PATH", "data.db")
 UPLOAD_DIR = Path(os.getenv("FILE_STORAGE", "./app/uploads"))
 WEBUI_URL = os.getenv("WEBUI_URL", "http://localhost:8989")
@@ -92,6 +99,18 @@ def init_db():
 
 
 init_db()
+
+
+# fork-only: makerworld + bambu auth wire-up
+_mw_conn = get_db_conn()
+try:
+    ensure_bambu_credentials_table(_mw_conn)
+finally:
+    _mw_conn.close()
+mw_auth_routes.set_db_conn_factory(get_db_conn)
+mw_routes.configure(db_conn_factory=get_db_conn, upload_dir=UPLOAD_DIR)
+app.include_router(mw_auth_routes.router)
+app.include_router(mw_routes.router)
 
 
 def now_ms() -> int:
