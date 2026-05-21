@@ -1,8 +1,13 @@
+import base64
 import logging
 import re
+from dataclasses import dataclass
 from typing import List, Optional
 
 import requests
+
+from custom_auth import bambu_auth
+from custom_auth.bambu_auth import BambuAuthExpiredError, BambuAuthNotConfiguredError
 
 
 log = logging.getLogger(__name__)
@@ -13,10 +18,17 @@ BAMBU_API_BASE = "https://api.bambulab.com"
 _MODEL_PAGE_RE = re.compile(r"/models/(\d+)")
 
 _REQUEST_TIMEOUT = 15.0  # seconds
+_DOWNLOAD_TIMEOUT = 120.0  # 3MF files can be tens of MB
 
 
 class MakerworldUrlError(ValueError):
     """The pasted URL doesn't look like a Makerworld model page."""
+
+
+@dataclass(frozen=True)
+class DownloadedFile:
+    content: bytes
+    name: Optional[str]  # filename Bambu suggests, if any
 
 
 def _parse_design_id(url: str) -> int:
@@ -113,3 +125,112 @@ class MakerworldImporter:
         if not hits:
             log.info("makerworld: design %d has no instances (raw uploads only?)", design_id)
         return hits
+
+    # ----- authenticated half (needs a Bambu account) -----
+
+    def importfromId(
+        self,
+        profile_id: str,
+        model_id: str,
+        preview_path: Optional[str],
+        *,
+        db_conn,
+    ):
+        """Download the .3mf bytes for a given (profileId, modelId) pair
+        and return (DownloadedFile, thumbnail_data_url).
+
+        Raises BambuAuthExpiredError if the user's stored credentials
+        won't authenticate; the route catches that and returns HTTP 401
+        with {error: 'bambu_auth_expired'} so the frontend can surface
+        the re-sign-in banner. Raises BambuAuthNotConfiguredError if
+        the user has never signed in.
+        """
+        token = bambu_auth.get_valid_access_token(db_conn)
+
+        self.session = requests.Session()
+        try:
+            presigned, suggested_name = self._get_presigned_url(
+                profile_id=profile_id, model_id=model_id, token=token
+            )
+            content = self._download_s3(presigned)
+            thumbnail = self._make_thumbnail(preview_path) if preview_path else ""
+            log.info(
+                "makerworld: imported profileId=%s (modelId=%s) as %r (%d bytes)",
+                profile_id,
+                model_id,
+                suggested_name,
+                len(content),
+            )
+            return DownloadedFile(content=content, name=suggested_name), thumbnail
+        finally:
+            self.session.close()
+            self.session = None
+
+    def _get_presigned_url(
+        self, *, profile_id: str, model_id: str, token: str
+    ) -> tuple:
+        """Call the authenticated profile endpoint. Returns (url, name).
+        On 401 (token revoked between our expiry check and now), raises
+        BambuAuthExpiredError so the route maps to bambu_auth_expired."""
+        assert self.session is not None
+        url = (
+            f"{BAMBU_API_BASE}/v1/iot-service/api/user/profile/{profile_id}"
+            f"?model_id={model_id}"
+        )
+        r = self.session.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if r.status_code == 401:
+            log.info(
+                "makerworld: profile endpoint returned 401 (token revoked mid-flight?)"
+            )
+            raise BambuAuthExpiredError(
+                "Bambu Cloud rejected the access token; user must sign in again"
+            )
+        r.raise_for_status()
+        data = r.json()
+        presigned = data.get("url")
+        if not presigned:
+            raise RuntimeError(
+                f"Bambu profile response missing 'url' (keys: {sorted(data)})"
+            )
+        return presigned, data.get("name")
+
+    def _download_s3(self, presigned_url: str) -> bytes:
+        """Fetch the presigned S3 URL exactly as given — no redirect-follow,
+        no query-string re-encoding (signatures break on either)."""
+        assert self.session is not None
+        r = self.session.get(
+            presigned_url,
+            allow_redirects=False,
+            timeout=_DOWNLOAD_TIMEOUT,
+            stream=True,
+        )
+        if 300 <= r.status_code < 400:
+            raise RuntimeError(
+                f"Unexpected redirect from S3 presigned URL (HTTP {r.status_code}); "
+                "signature may be invalid or Bambu changed their flow"
+            )
+        r.raise_for_status()
+        return r.content
+
+    def _make_thumbnail(self, url: str) -> str:
+        """Fetch a preview image and return a data:image/png;base64,... URL
+        suitable for inlining into the model row's thumbnail column.
+        Returns '' on any failure (thumbnails are nice-to-have, not
+        required for import to succeed)."""
+        assert self.session is not None
+        if not url or len(url) < 5:
+            return ""
+        try:
+            r = self.session.get(url, allow_redirects=True, timeout=_REQUEST_TIMEOUT)
+            r.raise_for_status()
+            encoded = base64.b64encode(r.content).decode("ascii")
+            # Bambu's CDN serves JPEG and PNG both; image/png is fine as a
+            # data: prefix for browser rendering — browsers sniff content.
+            return "data:image/png;base64," + encoded
+        except requests.RequestException as e:
+            log.warning("makerworld: thumbnail fetch failed for %s: %s", url, e)
+            return ""
