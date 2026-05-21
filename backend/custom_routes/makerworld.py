@@ -12,6 +12,7 @@ from custom_auth.bambu_auth import (
 )
 from custom_importers._persist import persist_imported_model
 from custom_importers.makerworld import (
+    LikedDesign,
     MakerworldImporter,
     MakerworldUrlError,
 )
@@ -58,6 +59,48 @@ def _get_db():
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+@router.get("/liked")
+def list_liked(limit: int = 24, offset: int = 0):
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    importer = MakerworldImporter()
+    conn = _get_db()
+    try:
+        try:
+            designs, total, hidden = importer.list_liked(
+                limit=limit, offset=offset, db_conn=conn
+            )
+        except (BambuAuthExpiredError, BambuAuthNotConfiguredError) as e:
+            log.info("makerworld /liked: bambu_auth_expired (%s)", e)
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "bambu_auth_expired"},
+            )
+        return {
+            "hits": [_liked_to_dict(d) for d in designs],
+            "total": total,
+            "hiddenCnt": hidden,
+        }
+    finally:
+        conn.close()
+
+
+def _liked_to_dict(d: LikedDesign) -> dict:
+    return {
+        "designId": d.design_id,
+        "modelId": d.model_id,
+        "title": d.title,
+        "slug": d.slug,
+        "coverUrl": d.cover_url,
+        "creatorHandle": d.creator_handle,
+        "isPrintable": d.is_printable,
+        "nsfw": d.nsfw,
+        "webUrl": d.web_url,
+    }
 
 
 @router.post("/options")
