@@ -146,6 +146,40 @@ The application requires two main volumes to persist data. If you are using the 
 
 ---
 
+## 🏷️ Importing from Makerworld (fork feature)
+
+Beyond upstream's Printables URL import, this fork supports importing print profiles from **Makerworld** (Bambu Lab's model-sharing site). Anonymous metadata (the list of print profiles for a given model URL) works without sign-in; downloading the actual `.3mf` requires a Bambu Cloud account.
+
+### One-time setup
+
+1. Open the app, navigate to **Settings → Bambu Cloud**.
+2. Enter your Bambu Lab account email and click **Send verification code**.
+3. Bambu emails you a 6-digit code. Type it in and click **Verify & sign in**.
+4. Settings now shows *"Signed in as &lt;email&gt; — expires &lt;date&gt;"*. Tokens are valid for ~3 months; you'll repeat this flow when they expire.
+
+### Using it
+
+1. Click **Import from URL** in the toolbar.
+2. Paste a Makerworld model URL like `https://makerworld.com/en/models/<id>-<slug>`.
+3. Pick the print profiles you want from the options modal.
+4. Import — each chosen profile becomes its own model row.
+
+If your Bambu Cloud sign-in has expired, the URL-import modal shows a red banner pointing you back to Settings. The import retries cleanly after you re-sign-in.
+
+### Storage and security
+
+The access + refresh tokens and your account email are stored **plaintext** in `data.db` next to your other STLVault data. STLVault is a single-user self-hosted app; the token has the same trust level as `data.db` itself — protect the file, you've protected the token. There's no encryption-at-rest layer because the only sensible key would have to live somewhere else on the same host, defeating the purpose.
+
+### Caveats
+
+- Cloudflare blocks plain-HTTP scraping of `makerworld.com`, so this feature talks to `api.bambulab.com` directly (the same JSON API Bambu Studio uses). If Bambu ever puts that host behind Cloudflare too, the importer will break and we'll need a different approach.
+- Bambu's official `/refreshtoken` endpoint currently returns 401 for everyone (per [Doridian/OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/blob/main/cloud-http.md) — referenced in the design doc). We try it anyway so that *if* Bambu re-enables it someday, silent rotation works automatically. Until then, the ~3-month manual re-sign-in is the normal cadence.
+- Bambu rate-limits `/sendemailcode` and `/login` after a few failed attempts. If you get stuck during sign-in, wait ~10 minutes before retrying.
+
+Full design + URL-probe findings: [`docs/plans/2026-05-21-makerworld-importer-design.md`](docs/plans/2026-05-21-makerworld-importer-design.md).
+
+---
+
 ## 🗺️ Roadmap
 
 - [x] Basic File Management (Upload, Move, Delete)

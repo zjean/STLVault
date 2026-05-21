@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { bool } from "three/tsl";
+import CloudSettings from "./custom-bambu/CloudSettings";
 
 interface SettingsProps {
   onBack: () => void;
@@ -185,6 +186,9 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
             </form>
           </div>
         </div>
+
+        {/* Bambu Cloud (fork addition) */}
+        <CloudSettings />
       </div>
     </div>
   );

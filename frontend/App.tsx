@@ -8,6 +8,11 @@ import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
 import {
+  retrieveModelOptionsByHost,
+  importModelFromIdByHost,
+  MakerworldAuthExpiredError,
+} from "./services/custom-importers";
+import {
   FolderInput,
   Tags,
   X,
@@ -73,6 +78,7 @@ const App = () => {
   );
   const [importUrl, setImportUrl] = useState("");
   const [importFolderId, setImportFolderId] = useState("");
+  const [bambuAuthExpired, setBambuAuthExpired] = useState(false);
   const port = import.meta.env.VITE_API_URL;
   // Delete Confirmation State
   const [deleteConfirmState, setDeleteConfirmState] = useState<{
@@ -312,7 +318,7 @@ const App = () => {
     if (!importUrl || !importFolderId) return;
 
     try {
-      const ModelOptions = await api.retrieveModelOptions(importUrl);
+      const ModelOptions = await retrieveModelOptionsByHost(importUrl);
       const NewSet = new Set("");
       ModelOptions.forEach((m) => {
         if (!NewSet.has(m.folder)) {
@@ -365,10 +371,12 @@ const App = () => {
     setIsLoading(true);
     setShowImportOptionsModal(false);
     setUploadQueue((prev) => prev + selectedOptions.size);
+    setBambuAuthExpired(false);
     try {
       for (const model of modelsOptions) {
         if (selectedOptions.has(model.id)) {
-          let newModel = await api.importModelFromId(
+          let newModel = await importModelFromIdByHost(
+            importUrl,
             model.id,
             model.name,
             model.parentId,
@@ -381,8 +389,14 @@ const App = () => {
         }
       }
     } catch (error) {
-      console.error("Import failed:", error);
-      alert("Failed to import from URL");
+      if (error instanceof MakerworldAuthExpiredError) {
+        console.warn("Makerworld import: bambu auth expired");
+        setBambuAuthExpired(true);
+        setUploadQueue(0);
+      } else {
+        console.error("Import failed:", error);
+        alert("Failed to import from URL");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -940,14 +954,27 @@ const App = () => {
                           type="url"
                           required
                           className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
-                          placeholder="https://www.printables.com/model/..."
+                          placeholder="https://www.printables.com/model/... or https://makerworld.com/en/models/..."
                           value={importUrl}
                           onChange={(e) => setImportUrl(e.target.value)}
                         />
                         <p className="text-xs text-slate-500 mt-1">
-                          Paste a link from Printables or similar sites
+                          Paste a link from Printables or Makerworld. Makerworld
+                          downloads require a Bambu Cloud sign-in in Settings.
                         </p>
                       </div>
+
+                      {bambuAuthExpired && (
+                        <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-200">
+                          <p className="font-semibold mb-1">
+                            Bambu Cloud sign-in required
+                          </p>
+                          <p className="text-red-300/90">
+                            Open Settings &rarr; Bambu Cloud and sign in (or
+                            re-sign-in) to import from Makerworld.
+                          </p>
+                        </div>
+                      )}
 
                       <div className="mb-6">
                         <label className="block text-sm font-medium text-slate-400 mb-1">
