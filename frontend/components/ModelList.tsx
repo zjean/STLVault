@@ -296,7 +296,7 @@ const ModelList: React.FC<ModelListProps> = ({
   return (
     <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-bg">
       {/* === Main header === */}
-      <header className="px-4 py-3.5 md:px-7 md:py-4 border-b border-border-soft flex items-center gap-3 md:gap-4 flex-wrap">
+      <header className="px-4 py-3.5 md:px-7 md:pt-[22px] md:pb-[18px] border-b border-border-soft flex items-center gap-3 md:gap-4 flex-wrap">
         {onOpenMobileSidebar && (
           <button
             type="button"
@@ -307,11 +307,11 @@ const ModelList: React.FC<ModelListProps> = ({
             <MenuIcon size={20} />
           </button>
         )}
-        <div className="flex items-baseline gap-2 min-w-0">
-          <h1 className="text-[17px] md:text-[18px] font-medium -tracking-[0.01em] text-fg truncate">
+        <div className="flex items-baseline gap-2.5 min-w-0">
+          <h1 className="text-[16px] md:text-[22px] font-semibold -tracking-[0.02em] text-fg truncate">
             {currentFolderName}
           </h1>
-          <span className="hidden sm:inline-flex font-mono text-[12px] text-fg-3 bg-bg-3 px-2 py-0.5 rounded-pill">
+          <span className="hidden sm:inline-flex font-mono text-[12px] text-fg-2 bg-bg-3 px-2.5 py-1 rounded-pill">
             {processedFolders.length} folders · {processedModels.length} models
             {models.length !== processedModels.length &&
               ` (filtered from ${models.length})`}
@@ -800,11 +800,11 @@ const ModelCardGrid: React.FC<CardProps> = ({
         </button>
       </div>
 
-      <div className="px-3.5 py-3 flex flex-col gap-1 flex-1">
-        <div className="text-[13.5px] font-medium text-fg truncate -tracking-[0.005em]">
+      <div className="px-3.5 py-3 flex flex-col gap-1.5 flex-1">
+        <div className="text-[14px] font-medium text-fg truncate -tracking-[0.005em]">
           {model.name}
         </div>
-        <div className="font-mono text-[11px] text-fg-3 flex items-center gap-2">
+        <div className="font-mono text-[11.5px] text-fg-2 flex items-center gap-2">
           <span>{formatSize(model.size)}</span>
           <span className="w-0.5 h-0.5 bg-current rounded-full" />
           <span>{new Date(model.dateAdded).toLocaleDateString()}</span>
@@ -944,8 +944,8 @@ const ModelCardList: React.FC<CardProps> = ({
         )}
       </div>
       <div className="min-w-0">
-        <div className="text-[13.5px] font-medium text-fg truncate">{model.name}</div>
-        <div className="font-mono text-[11px] text-fg-3 flex items-center gap-2">
+        <div className="text-[14px] font-medium text-fg truncate">{model.name}</div>
+        <div className="font-mono text-[11.5px] text-fg-2 flex items-center gap-2">
           <span>{formatSize(model.size)}</span>
           <span className="w-0.5 h-0.5 bg-current rounded-full" />
           <span>{new Date(model.dateAdded).toLocaleDateString()}</span>

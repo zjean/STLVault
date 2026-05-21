@@ -257,10 +257,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div>
         <div
           className={[
-            "group/row flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer transition-colors",
+            "group/row flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer font-medium transition-colors",
             isSelected
               ? "bg-accent/15 text-accent"
-              : "text-fg-2 hover:bg-bg-3 hover:text-fg",
+              : "text-fg hover:bg-bg-3",
             isDropTarget ? "ring-1 ring-accent/60 bg-accent/10" : "",
           ].join(" ")}
           onClick={() => {
@@ -384,12 +384,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const navItemClass = (active: boolean, disabled = false) =>
     [
-      "flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13.5px] w-full text-left transition-colors",
+      "flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13.5px] font-medium w-full text-left transition-colors",
       active
-        ? "bg-accent/15 text-accent font-medium"
+        ? "bg-accent/15 text-accent"
         : disabled
           ? "text-fg-3 opacity-50 cursor-not-allowed"
-          : "text-fg-2 hover:bg-bg-3 hover:text-fg",
+          : "text-fg hover:bg-bg-3",
     ].join(" ");
 
   return (
@@ -489,11 +489,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Library label */}
-      <div className="px-3 pt-3 pb-1 flex items-center justify-between text-[10.5px] uppercase tracking-[0.08em] text-fg-3">
+      <div className="px-3 pt-3 pb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-2">
         <button
           type="button"
           onClick={() => setLibraryCollapsed((c) => !c)}
-          className="flex items-center gap-1.5 px-2 py-1.5 hover:text-fg-2 transition-colors"
+          className="flex items-center gap-1.5 px-2 py-1.5 hover:text-fg transition-colors"
         >
           <ChevronRight
             size={12}
