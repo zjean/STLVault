@@ -165,6 +165,11 @@ const App = () => {
     if (isDesktop) setIsMobileSidebarOpen(false);
   }, [isDesktop]);
 
+  // Close mobile sidebar on any route change
+  useEffect(() => {
+    setIsMobileSidebarOpen(false);
+  }, [location.pathname]);
+
   // Mobile sidebar animation: keep mounted during close transition
   useEffect(() => {
     const transitionMs = 220;
@@ -681,7 +686,6 @@ const App = () => {
             onUploadToFolder={(folderId, files) =>
               handleUpload(files, folderId)
             }
-            onOpenSettings={openSettings}
             variant="desktop"
           />
         ) : (
@@ -727,10 +731,6 @@ const App = () => {
                     onUploadToFolder={(folderId, files) =>
                       handleUpload(files, folderId)
                     }
-                    onOpenSettings={() => {
-                      openSettings();
-                      setIsMobileSidebarOpen(false);
-                    }}
                     variant="mobile"
                   />
                 </div>
