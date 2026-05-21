@@ -11,15 +11,6 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Legacy palette — kept until phase 6 polish drops the last usages.
-        vault: {
-          900: "#0f172a",
-          800: "#1e293b",
-          700: "#334155",
-          600: "#475569",
-          accent: "#3b82f6",
-        },
-
         // Design tokens. CSS vars are OKLCH triplets in globals.css so
         // Tailwind's `<alpha-value>` placeholder works (bg-bg/50, etc.).
         bg: "oklch(var(--bg) / <alpha-value>)",

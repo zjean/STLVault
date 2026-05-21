@@ -1,10 +1,14 @@
 import React, { useState } from "react";
-import { Menu as MenuIcon, ChevronLeft, Check } from "lucide-react";
+import { Menu as MenuIcon, ChevronLeft, Check, Moon, Sun } from "lucide-react";
 import CloudSettings from "./custom-bambu/CloudSettings";
+
+type ThemeMode = "dark" | "light";
 
 interface SettingsProps {
   onBack: () => void;
   onOpenMobileSidebar?: () => void;
+  theme: ThemeMode;
+  onThemeChange: (next: ThemeMode) => void;
 }
 
 type SlicerType = "orcaslicer" | "prusaslicer" | "bambu" | "cura";
@@ -21,7 +25,12 @@ const SLICERS: Record<SlicerType, SlicerConfig> = {
   cura: { name: "Cura", protocol: "cura://open?file=" },
 };
 
-const Settings: React.FC<SettingsProps> = ({ onBack, onOpenMobileSidebar }) => {
+const Settings: React.FC<SettingsProps> = ({
+  onBack,
+  onOpenMobileSidebar,
+  theme,
+  onThemeChange,
+}) => {
   const [apiPortStatus, setApiPortStatus] = useState(
     !!localStorage.getItem("api-port-override"),
   );
@@ -100,6 +109,35 @@ const Settings: React.FC<SettingsProps> = ({ onBack, onOpenMobileSidebar }) => {
               Cloud sign-in.
             </p>
           </div>
+
+          {/* === Appearance === */}
+          <section className="mb-9">
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              Appearance
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              Dark by default — pick the surface tone you'd rather stare at.
+            </p>
+
+            <div className="inline-flex bg-bg-3 rounded-lg p-[3px] gap-0.5">
+              {(["dark", "light"] as ThemeMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onThemeChange(mode)}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] transition-all ${
+                    theme === mode
+                      ? "bg-surface text-fg shadow-soft"
+                      : "text-fg-3 hover:text-fg"
+                  }`}
+                  aria-pressed={theme === mode}
+                >
+                  {mode === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+                  <span className="capitalize">{mode}</span>
+                </button>
+              ))}
+            </div>
+          </section>
 
           {/* === Default Slicer === */}
           <section className="mb-9">

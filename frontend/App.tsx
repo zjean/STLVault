@@ -36,21 +36,46 @@ const App = () => {
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const isMobile = !isDesktop;
   const visualViewport = useVisualViewport();
+  // Theme follows the data-theme attribute on <html>. Settings updates both
+  // this state and the attribute; we mirror the attribute → MUI palette here
+  // so MUI's CssBaseline doesn't repaint body with its own defaults.
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    document.documentElement.getAttribute("data-theme") === "light"
+      ? "light"
+      : "dark",
+  );
+  const applyTheme = (next: "dark" | "light") => {
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("stlvault-theme", next);
+  };
   // MUI palette won't take oklch() — these are sRGB approximations of the
-  // dark-theme tokens in globals.css so MUI's CssBaseline doesn't repaint
-  // the body with its default #121212.
-  const darkTheme = createTheme({
-    palette: {
-      mode: "dark",
-      background: {
-        default: "rgb(30, 28, 26)", // oklch(0.155 0.005 60) — warm graphite
-        paper: "rgb(46, 43, 40)", // oklch(0.21 0.007 60)
-      },
-      text: {
-        primary: "rgb(244, 240, 232)", // oklch(0.96 0.008 80)
-        secondary: "rgb(195, 188, 175)", // oklch(0.78 0.01 70)
-      },
-    },
+  // tokens in globals.css.
+  const muiTheme = createTheme({
+    palette:
+      theme === "dark"
+        ? {
+            mode: "dark",
+            background: {
+              default: "rgb(30, 28, 26)", // oklch(0.155 0.005 60) — warm graphite
+              paper: "rgb(46, 43, 40)", // oklch(0.21 0.007 60)
+            },
+            text: {
+              primary: "rgb(244, 240, 232)", // oklch(0.96 0.008 80)
+              secondary: "rgb(195, 188, 175)", // oklch(0.78 0.01 70)
+            },
+          }
+        : {
+            mode: "light",
+            background: {
+              default: "rgb(251, 250, 248)", // oklch(0.985 0.003 80)
+              paper: "rgb(255, 255, 255)", // oklch(1 0 0)
+            },
+            text: {
+              primary: "rgb(48, 46, 43)", // oklch(0.2 0.01 60)
+              secondary: "rgb(108, 105, 100)", // oklch(0.42 0.01 60)
+            },
+          },
     typography: {
       fontFamily:
         '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -660,12 +685,12 @@ const App = () => {
   };
 
   return (
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <div
         className={`${
           isDesktop ? "flex" : "flex flex-col"
-        } h-dvh text-slate-200 font-sans selection:bg-blue-500/30 overflow-hidden`}
+        } h-dvh text-fg font-sans selection:bg-accent/30 overflow-hidden`}
       >
         {isDesktop ? (
           <Sidebar
@@ -737,6 +762,8 @@ const App = () => {
             onOpenMobileSidebar={
               !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
             }
+            theme={theme}
+            onThemeChange={applyTheme}
           />
         ) : (
           <>
@@ -780,7 +807,7 @@ const App = () => {
 
               {/* Upload Indicator */}
               {uploadQueue > 0 && (
-                <div className="absolute bottom-6 left-6 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 flex items-center gap-3 animate-pulse">
+                <div className="absolute bottom-6 left-6 bg-accent text-accent-fg px-4 py-2 rounded-lg shadow-lg z-50 flex items-center gap-3 animate-pulse">
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   <span className="text-sm font-medium">
                     Uploading {uploadQueue} file(s)...
@@ -888,7 +915,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="bg-vault-800 border border-vault-600 rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
+                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
                     style={{
                       maxHeight: Math.max(
                         240,
@@ -901,33 +928,33 @@ const App = () => {
                   >
                     <div className="flex justify-between items-center mb-6">
                       <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <FileUp className="w-5 h-5 text-blue-500" /> Upload
+                        <FileUp className="w-5 h-5 text-accent" /> Upload
                         Files
                       </h3>
                       <button
                         onClick={() => setShowUploadModal(false)}
-                        className="text-slate-400 hover:text-white"
+                        className="text-fg-3 hover:text-fg"
                       >
                         <X className="w-5 h-5" />
                       </button>
                     </div>
 
                     <form onSubmit={handleConfirmUpload}>
-                      <div className="mb-4 p-3 bg-vault-900/50 rounded-lg border border-vault-700/50">
-                        <p className="text-sm text-slate-300 font-medium">
+                      <div className="mb-4 p-3 bg-bg-2/50 rounded-lg border border-border-soft">
+                        <p className="text-sm text-fg-2 font-medium">
                           {pendingFiles.length} files selected
                         </p>
-                        <p className="text-xs text-slate-500 truncate mt-1">
+                        <p className="text-xs text-fg-3 truncate mt-1">
                           {pendingFiles.map((f) => f.name).join(", ")}
                         </p>
                       </div>
 
                       <div className="mb-4">
-                        <label className="block text-sm font-medium text-slate-400 mb-1">
+                        <label className="block text-sm font-medium text-fg-3 mb-1">
                           Destination Folder
                         </label>
                         <select
-                          className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-blue-500 outline-none"
+                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none"
                           value={uploadFolderId}
                           onChange={(e) => setUploadFolderId(e.target.value)}
                         >
@@ -943,17 +970,17 @@ const App = () => {
                       </div>
 
                       <div className="mb-6">
-                        <label className="block text-sm font-medium text-slate-400 mb-1">
+                        <label className="block text-sm font-medium text-fg-3 mb-1">
                           Add Tags (Optional)
                         </label>
                         <input
                           type="text"
-                          className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-blue-500 outline-none placeholder:text-slate-600"
+                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none placeholder:text-fg-3"
                           placeholder="scifi, armor, weapon..."
                           value={uploadTags}
                           onChange={(e) => setUploadTags(e.target.value)}
                         />
-                        <p className="text-xs text-slate-500 mt-1">
+                        <p className="text-xs text-fg-3 mt-1">
                           Separate tags with commas
                         </p>
                       </div>
@@ -962,14 +989,14 @@ const App = () => {
                         <button
                           type="button"
                           onClick={() => setShowUploadModal(false)}
-                          className="flex-1 py-2 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors"
+                          className="flex-1 py-2 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
                         >
                           Cancel
                         </button>
                         <button
                           type="submit"
                           disabled={!uploadFolderId}
-                          className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex-1 py-2 rounded-lg bg-accent hover:brightness-105 text-accent-fg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Upload
                         </button>
@@ -994,7 +1021,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="bg-vault-800 border border-vault-600 rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
+                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
                     style={{
                       maxHeight: Math.max(
                         240,
@@ -1007,12 +1034,12 @@ const App = () => {
                   >
                     <div className="flex justify-between items-center mb-6">
                       <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <Globe className="w-5 h-5 text-indigo-500" /> Import
+                        <Globe className="w-5 h-5 text-accent" /> Import
                         from URL
                       </h3>
                       <button
                         onClick={() => setShowImportModal(false)}
-                        className="text-slate-400 hover:text-white"
+                        className="text-fg-3 hover:text-fg"
                       >
                         <X className="w-5 h-5" />
                       </button>
@@ -1020,19 +1047,19 @@ const App = () => {
 
                     <form onSubmit={handleImportSubmit}>
                       <div className="mb-4">
-                        <label className="block text-sm font-medium text-slate-400 mb-1">
+                        <label className="block text-sm font-medium text-fg-3 mb-1">
                           Model URL
                         </label>
                         <input
                           autoFocus
                           type="url"
                           required
-                          className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
+                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none placeholder:text-fg-3"
                           placeholder="https://www.printables.com/model/... or https://makerworld.com/en/models/..."
                           value={importUrl}
                           onChange={(e) => setImportUrl(e.target.value)}
                         />
-                        <p className="text-xs text-slate-500 mt-1">
+                        <p className="text-xs text-fg-3 mt-1">
                           Paste a link from Printables or Makerworld. Makerworld
                           downloads require a Bambu Cloud sign-in in Settings.
                         </p>
@@ -1051,11 +1078,11 @@ const App = () => {
                       )}
 
                       <div className="mb-6">
-                        <label className="block text-sm font-medium text-slate-400 mb-1">
+                        <label className="block text-sm font-medium text-fg-3 mb-1">
                           Destination Folder
                         </label>
                         <select
-                          className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none"
+                          className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none"
                           value={importFolderId}
                           onChange={(e) => setImportFolderId(e.target.value)}
                         >
@@ -1074,14 +1101,14 @@ const App = () => {
                         <button
                           type="button"
                           onClick={() => setShowImportModal(false)}
-                          className="flex-1 py-2 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors"
+                          className="flex-1 py-2 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
                         >
                           Cancel
                         </button>
                         <button
                           type="submit"
                           disabled={!importUrl || !importFolderId}
-                          className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex-1 py-2 rounded-lg bg-accent hover:brightness-105 text-accent-fg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Import
                         </button>
@@ -1119,7 +1146,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="relative bg-vault-800 border border-vault-600 rounded-xl p-6 w-full lg:w-1/2 shadow-2xl animate-in zoom-in-95 duration-200 "
+                    className="relative bg-surface border border-border rounded-xl p-6 w-full lg:w-1/2 shadow-2xl animate-in zoom-in-95 duration-200 "
                     style={{
                       maxHeight: Math.max(
                         240,
@@ -1132,12 +1159,12 @@ const App = () => {
                   >
                     <div className="static flex top-0 justify-between items-center mb-6">
                       <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <Globe className="w-5 h-5 text-indigo-500" /> Select
+                        <Globe className="w-5 h-5 text-accent" /> Select
                         model to download
                       </h3>
                       <button
                         onClick={() => setShowImportOptionsModal(false)}
-                        className="text-slate-400 hover:text-white"
+                        className="text-fg-3 hover:text-fg"
                       >
                         <X className="w-5 h-5" />
                       </button>
@@ -1162,15 +1189,15 @@ const App = () => {
                                   onClick={() =>
                                     handleOptionsToggleSelection(model.id)
                                   }
-                                  className={`group bg-vault-900 border rounded-xl p-4 cursor-pointer transition-all flex items-center gap-4 mb-2 relative overflow-hidden
+                                  className={`group bg-bg-2 border rounded-xl p-4 cursor-pointer transition-all flex items-center gap-4 mb-2 relative overflow-hidden
                               ${
                                 selectedOptions.has(model.id)
-                                  ? "border-blue-500 ring-1 ring-blue-500/50"
-                                  : "border-vault-700 hover:border-vault-600"
+                                  ? "border-accent ring-1 ring-accent/50"
+                                  : "border-border hover:border-border"
                               }
                             `}
                                 >
-                                  <div className="w-12 h-12 bg-blue-900/20 rounded-lg flex items-center justify-center text-blue-500 group-hover:text-blue-400 group-hover:scale-110 transition-all shrink-0">
+                                  <div className="w-12 h-12 bg-accent/15 rounded-lg flex items-center justify-center text-accent group-hover:text-accent group-hover:scale-110 transition-all shrink-0">
                                     <img
                                       src={model.previewPath}
                                       alt={model.name}
@@ -1179,10 +1206,10 @@ const App = () => {
                                   </div>
 
                                   <div className="min-w-0">
-                                    <h3 className="font-semibold text-slate-200 truncate group-hover:text-white">
+                                    <h3 className="font-semibold text-fg truncate group-hover:text-fg">
                                       {model.name}
                                     </h3>
-                                    <p className="text-xs text-slate-500">
+                                    <p className="text-xs text-fg-3">
                                       {model.typeName}
                                     </p>
                                   </div>
@@ -1198,7 +1225,7 @@ const App = () => {
 
                     <div
                       onClick={() => handleImportChoice()}
-                      className="static bottom-0 p-2 mt-4 cursor-pointer rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors text-center"
+                      className="static bottom-0 p-2 mt-4 cursor-pointer rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors text-center"
                     >
                       {" "}
                       Import{" "}
@@ -1222,7 +1249,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="bg-vault-800 border border-vault-600 rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
+                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
                     style={{
                       maxHeight: Math.max(
                         240,
@@ -1240,7 +1267,7 @@ const App = () => {
                       <h3 className="text-xl font-bold text-white mb-2">
                         Confirm Deletion
                       </h3>
-                      <p className="text-slate-400 text-sm">
+                      <p className="text-fg-3 text-sm">
                         {deleteConfirmState.type === "single" &&
                           "Are you sure you want to delete this model? This action cannot be undone."}
                         {deleteConfirmState.type === "bulk" &&
@@ -1258,7 +1285,7 @@ const App = () => {
                             isOpen: false,
                           }))
                         }
-                        className="flex-1 py-2.5 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors"
+                        className="flex-1 py-2.5 rounded-lg bg-bg-3 hover:bg-surface-2 text-fg font-medium transition-colors"
                       >
                         Cancel
                       </button>
@@ -1287,7 +1314,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="bg-vault-800 border border-vault-600 rounded-xl p-6 w-80 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
+                    className="bg-surface border border-border rounded-xl p-6 w-80 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
                     style={{
                       maxHeight: Math.max(
                         200,
@@ -1304,7 +1331,7 @@ const App = () => {
                       </h3>
                       <button
                         onClick={() => setShowMoveModal(false)}
-                        className="text-slate-400 hover:text-white"
+                        className="text-fg-3 hover:text-fg"
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -1314,7 +1341,7 @@ const App = () => {
                         <button
                           key={folder.id}
                           onClick={() => handleBulkMoveSubmit(folder.id)}
-                          className="w-full text-left px-3 py-2 rounded hover:bg-vault-700 text-slate-300 hover:text-white text-sm transition-colors"
+                          className="w-full text-left px-3 py-2 rounded hover:bg-bg-3 text-fg-2 hover:text-fg text-sm transition-colors"
                         >
                           {folder.name}
                         </button>
@@ -1338,7 +1365,7 @@ const App = () => {
                   }}
                 >
                   <div
-                    className="bg-vault-800 border border-vault-600 rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
+                    className="bg-surface border border-border rounded-xl p-6 w-96 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto"
                     style={{
                       maxHeight: Math.max(
                         240,
@@ -1355,19 +1382,19 @@ const App = () => {
                       </h3>
                       <button
                         onClick={() => setShowTagModal(false)}
-                        className="text-slate-400 hover:text-white"
+                        className="text-fg-3 hover:text-fg"
                       >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
                     <form onSubmit={handleBulkTagSubmit}>
-                      <p className="text-sm text-slate-400 mb-2">
+                      <p className="text-sm text-fg-3 mb-2">
                         Add tags to {selectedIds.size} items (comma separated):
                       </p>
                       <input
                         autoFocus
                         type="text"
-                        className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-blue-500 outline-none mb-4"
+                        className="w-full bg-bg-2 border border-border rounded-md px-3 py-2 text-white focus:border-accent outline-none mb-4"
                         placeholder="scifi, armor, weapon..."
                         value={bulkTags}
                         onChange={(e) => setBulkTags(e.target.value)}
@@ -1376,13 +1403,13 @@ const App = () => {
                         <button
                           type="button"
                           onClick={() => setShowTagModal(false)}
-                          className="px-3 py-1.5 text-sm text-slate-300 hover:text-white"
+                          className="px-3 py-1.5 text-sm text-fg-2 hover:text-fg"
                         >
                           Cancel
                         </button>
                         <button
                           type="submit"
-                          className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded"
+                          className="px-3 py-1.5 text-sm bg-accent hover:brightness-105 text-accent-fg rounded"
                         >
                           Add Tags
                         </button>
