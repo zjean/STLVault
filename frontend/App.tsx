@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import ModelList from "./components/ModelList";
 import DetailPanel from "./components/DetailPanel";
 import Settings from "./components/Settings";
+import RecentView from "./components/RecentView";
 import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
@@ -96,6 +97,7 @@ const App = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const showSettings = location.pathname === "/settings";
+  const showRecent = location.pathname === "/recent";
   const openSettings = () => navigate("/settings");
   const closeSettings = () => navigate("/");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -764,6 +766,19 @@ const App = () => {
             }
             theme={theme}
             onThemeChange={applyTheme}
+          />
+        ) : showRecent ? (
+          <RecentView
+            models={models}
+            onBack={closeSettings}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
+            onOpenModel={(m) => {
+              setCurrentFolderId(m.folderId);
+              setSelectedModelId(m.id);
+              navigate("/");
+            }}
           />
         ) : (
           <>
