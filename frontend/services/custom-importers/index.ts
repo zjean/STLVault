@@ -25,7 +25,7 @@ export const retrieveModelOptionsByHost = (
     : api.retrieveModelOptions(url);
 
 export const importModelFromIdByHost = (
-  sourceHost: string,
+  sourceUrl: string,
   id: string,
   name: string,
   parentId: string,
@@ -33,7 +33,7 @@ export const importModelFromIdByHost = (
   folderId: string,
   typeName: string,
 ): Promise<STLModel> =>
-  isMakerworld(sourceHost)
+  isMakerworld(sourceUrl)
     ? makerworldApi.importModelFromId(
         id,
         name,
@@ -41,5 +41,14 @@ export const importModelFromIdByHost = (
         previewPath,
         folderId,
         typeName,
+        sourceUrl,
       )
-    : api.importModelFromId(id, name, parentId, previewPath, folderId, typeName);
+    : api.importModelFromId(
+        id,
+        name,
+        parentId,
+        previewPath,
+        folderId,
+        typeName,
+        sourceUrl,
+      );

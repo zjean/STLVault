@@ -48,11 +48,12 @@ export const makerworldApi = {
     previewPath: string,
     folderId: string,
     typeName: string,
+    sourceUrl?: string,
   ): Promise<STLModel> {
     const res = await fetch(`${apiBase()}/makerworld/importid`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, name, parentId, previewPath, folderId, typeName }),
+      body: JSON.stringify({ id, name, parentId, previewPath, folderId, typeName, sourceUrl }),
     });
     if (res.status === 401) {
       const data = await res.json().catch(() => null);
