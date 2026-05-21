@@ -1,18 +1,10 @@
-import React, { useState, useEffect } from "react";
-import {
-  Check,
-  ChevronLeft,
-  EthernetPort,
-  SettingsIcon,
-  TicketIcon,
-  Wrench,
-  X,
-} from "lucide-react";
-import { bool } from "three/tsl";
+import React, { useState } from "react";
+import { Menu as MenuIcon, ChevronLeft, Check } from "lucide-react";
 import CloudSettings from "./custom-bambu/CloudSettings";
 
 interface SettingsProps {
   onBack: () => void;
+  onOpenMobileSidebar?: () => void;
 }
 
 type SlicerType = "orcaslicer" | "prusaslicer" | "bambu" | "cura";
@@ -29,166 +21,223 @@ const SLICERS: Record<SlicerType, SlicerConfig> = {
   cura: { name: "Cura", protocol: "cura://open?file=" },
 };
 
-const Settings: React.FC<SettingsProps> = ({ onBack }) => {
-  const [apiPortStatus, setApiPortStatus] = useState(false);
-  // Initialize state directly from localStorage to prevent flash
+const Settings: React.FC<SettingsProps> = ({ onBack, onOpenMobileSidebar }) => {
+  const [apiPortStatus, setApiPortStatus] = useState(
+    !!localStorage.getItem("api-port-override"),
+  );
   const [selectedSlicer, setSelectedSlicer] = useState<SlicerType>(() => {
     const saved = localStorage.getItem("stlvault-slicer");
     return saved && saved in SLICERS ? (saved as SlicerType) : "orcaslicer";
   });
 
   const [selectedApiPort, setSelectedApiPort] = useState<string>(() => {
-    const envport = import.meta.env.VITE_API_URL;
-    const port = localStorage.getItem("api-port-override");
-    if (port) {
-      setApiPortStatus(true);
-    }
-    return port ? port : envport;
+    return (
+      localStorage.getItem("api-port-override") ||
+      import.meta.env.VITE_API_URL ||
+      ""
+    );
   });
 
-  // Save slicer preference to localStorage when changed
   const handleSlicerChange = (slicer: SlicerType) => {
     setSelectedSlicer(slicer);
     localStorage.setItem("stlvault-slicer", slicer);
   };
 
-  // Save API port preference to localStorage when changed
   const handleApiPortChange = (port: string) => {
     setSelectedApiPort(port);
+    setApiPortStatus(false);
   };
 
-  const handleApiForm = async (e: React.FormEvent) => {
+  const handleApiForm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedApiPort) return;
-
     localStorage.setItem("api-port-override", selectedApiPort);
     setApiPortStatus(true);
   };
 
+  const handleClearApiPort = () => {
+    localStorage.removeItem("api-port-override");
+    setSelectedApiPort(import.meta.env.VITE_API_URL || "");
+    setApiPortStatus(false);
+  };
+
   return (
-    <div className="flex-1 p-4 sm:p-8 h-full overflow-y-auto relative flex flex-col">
-      {/* Header Section */}
-      <div className="flex flex-col gap-6 mb-8">
-        <div className="flex items-center gap-4">
+    <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-bg">
+      {/* Header */}
+      <header className="px-4 py-3.5 md:px-7 md:py-4 border-b border-border-soft flex items-center gap-3">
+        {onOpenMobileSidebar && (
           <button
-            onClick={onBack}
-            className="flex items-center justify-center w-10 h-10 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-300 hover:text-white transition-colors"
-            aria-label="Go back"
+            type="button"
+            onClick={onOpenMobileSidebar}
+            className="md:hidden w-9 h-9 grid place-items-center rounded-md text-fg hover:bg-bg-3 transition-colors"
+            aria-label="Open sidebar"
           >
-            <ChevronLeft className="w-5 h-5" />
+            <MenuIcon size={20} />
           </button>
-          <div>
-            <h2 className="text-2xl font-bold text-white mb-1">Settings</h2>
-            <p className="text-sm text-slate-400">
-              Configure your STL Vault preferences
+        )}
+        <button
+          type="button"
+          onClick={onBack}
+          className="hidden md:inline-flex items-center gap-1.5 px-2 py-1.5 -ml-1 rounded-md text-fg-2 hover:bg-bg-3 hover:text-fg transition-colors text-[13px]"
+        >
+          <ChevronLeft size={16} />
+          Library
+        </button>
+        <h1 className="text-[17px] md:text-[18px] font-medium -tracking-[0.01em] text-fg">
+          Settings
+        </h1>
+      </header>
+
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[920px] mx-auto w-full px-4 md:px-7 py-7">
+          {/* Lead */}
+          <div className="mb-8 pb-6 border-b border-border-soft">
+            <h2 className="text-[28px] font-semibold -tracking-[0.02em] text-fg m-0">
+              Preferences
+            </h2>
+            <p className="text-fg-3 text-[13.5px] mt-1.5 max-w-[480px]">
+              Configure your STL Vault — slicer choice, backend host, and Bambu
+              Cloud sign-in.
             </p>
           </div>
-        </div>
-      </div>
 
-      {/* Content Section */}
-      <div className="flex-1 bg-vault-900/30 rounded-lg p-6 text-slate-300">
-        {/* Slicer Settings */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <Wrench className="w-5 h-5 text-blue-400" />
-            <h3 className="text-lg font-semibold text-white">Default Slicer</h3>
-          </div>
-          <p className="text-sm text-slate-400 mb-4">
-            Choose which slicer application to open when clicking "Open in
-            Slicer" button
-          </p>
+          {/* === Default Slicer === */}
+          <section className="mb-9">
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              Default slicer
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              The app that opens when you click <em>Open in slicer</em> on a
+              model. The slicer must register the protocol handler on your OS.
+            </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(Object.keys(SLICERS) as SlicerType[]).map((slicer) => (
-              <button
-                key={slicer}
-                onClick={() => handleSlicerChange(slicer)}
-                className={`p-4 rounded-lg border-2 transition-all text-left ${
-                  selectedSlicer === slicer
-                    ? "border-blue-500 bg-blue-500/10 shadow-lg shadow-blue-500/20"
-                    : "border-vault-700 bg-vault-800 hover:border-vault-600"
-                }`}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(Object.keys(SLICERS) as SlicerType[]).map((slicer) => {
+                const isSelected = selectedSlicer === slicer;
+                return (
+                  <button
+                    key={slicer}
+                    type="button"
+                    onClick={() => handleSlicerChange(slicer)}
+                    className={`relative p-4 rounded-[10px] border-[1.5px] transition-all flex flex-col gap-2 text-left ${
+                      isSelected
+                        ? "border-accent bg-accent/5"
+                        : "border-border-soft bg-surface hover:border-border"
+                    }`}
+                  >
+                    <span className="font-medium text-[14px] text-fg pr-7">
+                      {SLICERS[slicer].name}
+                    </span>
+                    <span className="font-mono text-[11px] text-fg-3 truncate">
+                      {SLICERS[slicer].protocol}
+                    </span>
+                    <span
+                      className={`absolute top-3 right-3 w-[18px] h-[18px] rounded-full grid place-items-center border-[1.5px] transition-colors ${
+                        isSelected
+                          ? "border-accent bg-accent text-accent-fg"
+                          : "border-border bg-transparent text-transparent"
+                      }`}
+                      aria-hidden
+                    >
+                      <Check size={11} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 px-3.5 py-2.5 bg-bg-3 border border-border-soft border-l-[3px] border-l-accent rounded-lg text-[12.5px] text-fg-2">
+              <strong className="text-fg font-semibold">Note:</strong> protocol
+              setup varies per slicer and OS. If clicking <em>Open in slicer</em>{" "}
+              opens nothing, install the slicer first or check its
+              "register-protocol" setting.
+            </div>
+          </section>
+
+          {/* === API Host === */}
+          <section className="mb-9">
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              API host
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              Overrides the backend URL baked into the build. Useful when
+              pointing the local frontend at a remote backend.
+            </p>
+
+            <div className="px-3.5 py-2.5 mb-4 bg-bg-3 border border-border-soft border-l-[3px] border-l-accent rounded-lg text-[12.5px] text-fg-2">
+              <strong className="text-fg font-semibold">Note:</strong> in{" "}
+              <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">
+                npm run dev
+              </code>{" "}
+              the Vite proxy handles <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">/api</code>{" "}
+              for you — only set an override here if you really want to talk to
+              a non-local backend.
+            </div>
+
+            <form
+              onSubmit={handleApiForm}
+              className="flex flex-col gap-2 max-w-[480px]"
+            >
+              <label
+                htmlFor="api-url-input"
+                className="text-[12.5px] font-medium text-fg-2"
               >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-white">
-                    {SLICERS[slicer].name}
-                  </span>
-                  {selectedSlicer === slicer && (
-                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                  )}
-                </div>
-                <span className="text-xs text-slate-500 mt-1 block">
-                  {SLICERS[slicer].protocol}
-                </span>
-              </button>
-            ))}
-          </div>
+                API URL
+              </label>
+              <input
+                id="api-url-input"
+                type="url"
+                inputMode="url"
+                required
+                value={selectedApiPort}
+                onChange={(e) => handleApiPortChange(e.target.value)}
+                placeholder="http://localhost:8000"
+                className="font-mono px-3 py-2.5 bg-surface border border-border rounded-lg text-[13px] text-fg outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/15 transition-all"
+              />
+              <p className="text-[12px] text-fg-3">
+                Where the FastAPI backend is reachable from the browser.
+              </p>
 
-          <div className="mt-4 p-4 bg-vault-800 rounded-lg border border-vault-700">
-            <p className="text-xs text-slate-400">
-              <span className="font-semibold text-slate-300">Note:</span> Your
-              slicer application must be installed and configured to handle
-              protocol links (e.g., {SLICERS[selectedSlicer].protocol}). The
-              exact setup varies by slicer and operating system.
-            </p>
-          </div>
-        </div>
-
-        {/* Api Settings*/}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <EthernetPort className="w-5 h-5 text-blue-400" />
-            <h3 className="text-lg font-semibold text-white">API Host</h3>
-          </div>
-          <p className="text-sm text-slate-400 mb-4">Choose the API Host URL</p>
-          <div className="mt-4 p-4 bg-vault-800 rounded-lg border border-vault-700 mb-4 ">
-            <p className="text-xs text-slate-400">
-              <span className="font-semibold text-slate-300">Note:</span> The
-              URL set here will override the one in the ENV variables.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <form onSubmit={handleApiForm}>
-              <div className="grid grid-cols-2 mb-4">
-                <label className="block col-span-2 text-sm font-medium text-slate-400 mb-1">
-                  API URL
-                </label>
-                <input
-                  autoFocus
-                  type="string"
-                  required
-                  className="col-span-2 w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
-                  placeholder="http://0.0.0.0:8989"
-                  value={selectedApiPort}
-                  onChange={(e) => handleApiPortChange(e.target.value)}
-                />
-
-                <p className="col-span-2 w-full text-xs text-slate-500 mt-1">
-                  Insert the port at which the API is served.
-                </p>
-              </div>
-
-              <div className="flex gap-3">
+              <div className="flex items-center gap-2 mt-1">
                 <button
                   type="submit"
                   disabled={!selectedApiPort}
-                  className="flex-1 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-accent text-accent-fg text-[13px] font-semibold hover:brightness-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Set
+                  Save override
                 </button>
-                {apiPortStatus ? (
-                  <Check className="flex text-green-400 rounded-full bg-vault-800 my-auto"></Check>
-                ) : (
-                  <X className="flex text-red-400 rounded-full bg-vault-800 my-auto"></X>
+                {apiPortStatus && (
+                  <button
+                    type="button"
+                    onClick={handleClearApiPort}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-surface hover:bg-surface-2 text-[13px] text-fg-2 transition-colors"
+                  >
+                    Clear override
+                  </button>
+                )}
+                {apiPortStatus && (
+                  <span className="inline-flex items-center gap-1.5 text-[12px] text-success font-medium ml-1">
+                    <Check size={13} /> Active
+                  </span>
                 )}
               </div>
             </form>
-          </div>
-        </div>
+          </section>
 
-        {/* Bambu Cloud (fork addition) */}
-        <CloudSettings />
+          {/* === Bambu Cloud (fork addition) === */}
+          <section>
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              Bambu Cloud
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              Sign in to import liked Makerworld designs straight into your
+              library.
+            </p>
+            <div className="rounded-[10px] border border-border-soft bg-surface p-4">
+              <CloudSettings />
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
