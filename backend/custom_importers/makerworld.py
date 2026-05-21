@@ -31,6 +31,39 @@ class DownloadedFile:
     name: Optional[str]  # filename Bambu suggests, if any
 
 
+@dataclass(frozen=True)
+class LikedDesign:
+    design_id: int
+    model_id: str
+    title: str
+    slug: str
+    cover_url: str
+    creator_handle: str
+    is_printable: bool
+    nsfw: bool
+
+    @property
+    def web_url(self) -> str:
+        # Slugged form avoids a redirect when the user clicks the Source link
+        # in DetailPanel; Bambu redirects bare /models/<id> → /models/<id>-<slug>.
+        s = self.slug.strip("-") or str(self.design_id)
+        return f"https://makerworld.com/en/models/{self.design_id}-{s}"
+
+
+def _parse_liked(hit: dict) -> LikedDesign:
+    creator = hit.get("designCreator") or {}
+    return LikedDesign(
+        design_id=int(hit.get("id") or 0),
+        model_id=str(hit.get("modelId") or ""),
+        title=str(hit.get("title") or "").strip() or f"design {hit.get('id')}",
+        slug=str(hit.get("slug") or ""),
+        cover_url=str(hit.get("cover") or ""),
+        creator_handle=str(creator.get("handle") or creator.get("name") or ""),
+        is_printable=bool(hit.get("isPrintable", True)),
+        nsfw=bool(hit.get("nsfw", False)),
+    )
+
+
 def _parse_design_id(url: str) -> int:
     m = _MODEL_PAGE_RE.search(url)
     if m is None:
@@ -126,7 +159,43 @@ class MakerworldImporter:
             log.info("makerworld: design %d has no instances (raw uploads only?)", design_id)
         return hits
 
-    # ----- authenticated half (needs a Bambu account) -----
+    # ----- authenticated browse (needs a Bambu account) -----
+
+    def list_liked(
+        self, *, limit: int, offset: int, db_conn
+    ) -> tuple:
+        """List the signed-in user's liked Makerworld designs.
+
+        Returns (designs, total, hidden_count). Same auth-error contract
+        as importfromId — caller routes BambuAuthExpiredError to HTTP 401
+        with {error: 'bambu_auth_expired'}.
+        """
+        token = bambu_auth.get_valid_access_token(db_conn)
+        url = (
+            f"{BAMBU_API_BASE}/v1/design-service/my/design/like"
+            f"?limit={limit}&offset={offset}"
+        )
+        with requests.Session() as s:
+            r = s.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            if r.status_code == 401:
+                log.info("makerworld: /my/design/like 401 — token rejected")
+                raise BambuAuthExpiredError(
+                    "Bambu Cloud rejected the access token; user must sign in again"
+                )
+            r.raise_for_status()
+            data = r.json()
+        hits = [_parse_liked(h) for h in (data.get("hits") or [])]
+        return (
+            hits,
+            int(data.get("total") or 0),
+            int(data.get("hiddenCnt") or 0),
+        )
+
+    # ----- authenticated download (needs a Bambu account) -----
 
     def importfromId(
         self,

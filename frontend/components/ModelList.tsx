@@ -13,6 +13,7 @@ import {
   ScreenShareIcon,
   XCircle,
   ChevronLeft,
+  Heart,
 } from "lucide-react";
 import { STLModel, Folder } from "../types";
 import { api } from "../services/api";
@@ -48,6 +49,7 @@ interface ModelListProps {
   onBackNavigation: () => void;
   onUpload: (files: FileList) => void;
   onImport: () => void;
+  onBrowseLiked?: () => void;
   onSelectModel: (model: STLModel) => void;
   onDelete: (id: string) => void;
   selectedModelId: string | null;
@@ -79,6 +81,7 @@ const ModelList: React.FC<ModelListProps> = ({
   onBackNavigation,
   onUpload,
   onImport,
+  onBrowseLiked,
   onSelectModel,
   onDelete,
   selectedModelId,
@@ -294,6 +297,15 @@ const ModelList: React.FC<ModelListProps> = ({
               >
                 Import URL
               </Button>
+              {onBrowseLiked && (
+                <Button
+                  variant="outlined"
+                  startIcon={<Heart />}
+                  onClick={onBrowseLiked}
+                >
+                  Browse Liked
+                </Button>
+              )}
               <Button
                 component="label"
                 role={undefined}
