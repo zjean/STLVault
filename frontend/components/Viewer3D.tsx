@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 import * as THREE from "three";
 import { LoadStep } from "./STEPLoader";
-import Button from "@mui/material/Button";
 
 let API_BASE_URL = "";
 
@@ -383,22 +382,17 @@ const Viewer3D: React.FC<Viewer3DProps> = ({
       <div className="absolute bottom-4 right-4 bg-black/50 px-3 py-1 rounded text-xs text-fg-2 pointer-events-none">
         LMB: Rotate | RMB: Pan | Scroll: Zoom
       </div>
-      {editing ? (
-        <div className="absolute top-4 px-4 ">
-          <Button
-            fullWidth
-            onClick={() => {
-              setUpdateThumb(true);
-            }}
-            startIcon={<GalleryVerticalEnd />}
-            variant="contained"
-            color="secondary"
+      {editing && (
+        <div className="absolute top-4 left-4 right-4">
+          <button
+            type="button"
+            onClick={() => setUpdateThumb(true)}
+            className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md bg-accent text-accent-fg text-[13px] font-medium hover:opacity-90 transition-opacity shadow-soft"
           >
-            Generate Thumbnail
-          </Button>
+            <GalleryVerticalEnd size={14} />
+            Generate thumbnail
+          </button>
         </div>
-      ) : (
-        <div></div>
       )}
     </div>
   );
