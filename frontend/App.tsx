@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import ModelList from "./components/ModelList";
 import DetailPanel from "./components/DetailPanel";
@@ -36,9 +37,24 @@ const App = () => {
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const isMobile = !isDesktop;
   const visualViewport = useVisualViewport();
+  // MUI palette won't take oklch() — these are sRGB approximations of the
+  // dark-theme tokens in globals.css so MUI's CssBaseline doesn't repaint
+  // the body with its default #121212.
   const darkTheme = createTheme({
     palette: {
       mode: "dark",
+      background: {
+        default: "rgb(30, 28, 26)", // oklch(0.155 0.005 60) — warm graphite
+        paper: "rgb(46, 43, 40)", // oklch(0.21 0.007 60)
+      },
+      text: {
+        primary: "rgb(244, 240, 232)", // oklch(0.96 0.008 80)
+        secondary: "rgb(195, 188, 175)", // oklch(0.78 0.01 70)
+      },
+    },
+    typography: {
+      fontFamily:
+        '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif',
     },
   });
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -53,7 +69,11 @@ const App = () => {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<number>(0);
-  const [showSettings, setShowSettings] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const showSettings = location.pathname === "/settings";
+  const openSettings = () => navigate("/settings");
+  const closeSettings = () => navigate("/");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isMobileSidebarMounted, setIsMobileSidebarMounted] = useState(false);
   const [isMobileSidebarVisible, setIsMobileSidebarVisible] = useState(false);
@@ -652,7 +672,7 @@ const App = () => {
             onSelectFolder={(id) => {
               setCurrentFolderId(id);
               setSelectedModelId(null);
-              setShowSettings(false);
+              closeSettings();
             }}
             onCreateFolder={handleCreateFolder}
             onRenameFolder={handleRenameFolder}
@@ -661,7 +681,7 @@ const App = () => {
             onUploadToFolder={(folderId, files) =>
               handleUpload(files, folderId)
             }
-            onOpenSettings={() => setShowSettings(true)}
+            onOpenSettings={openSettings}
             variant="desktop"
           />
         ) : (
@@ -670,7 +690,7 @@ const App = () => {
               title="STL Vault"
               subtitle={showSettings ? "Settings" : currentFolderName}
               onOpenSidebar={() => setIsMobileSidebarOpen(true)}
-              onOpenSettings={() => setShowSettings(true)}
+              onOpenSettings={openSettings}
               showMenuButton={!showSettings}
             />
 
@@ -697,7 +717,7 @@ const App = () => {
                     onSelectFolder={(id) => {
                       setCurrentFolderId(id);
                       setSelectedModelId(null);
-                      setShowSettings(false);
+                      closeSettings();
                       setIsMobileSidebarOpen(false);
                     }}
                     onCreateFolder={handleCreateFolder}
@@ -708,7 +728,7 @@ const App = () => {
                       handleUpload(files, folderId)
                     }
                     onOpenSettings={() => {
-                      setShowSettings(true);
+                      openSettings();
                       setIsMobileSidebarOpen(false);
                     }}
                     variant="mobile"
@@ -721,7 +741,7 @@ const App = () => {
 
         {/* Settings View */}
         {showSettings ? (
-          <Settings onBack={() => setShowSettings(false)} />
+          <Settings onBack={closeSettings} />
         ) : (
           <>
             <main className="flex-1 flex overflow-hidden relative">
