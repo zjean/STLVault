@@ -32,18 +32,12 @@ import {
 import JSZip from "jszip";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useVisualViewport } from "./hooks/useVisualViewport";
-import Snackbar, { SnackbarCloseReason } from "@mui/material/Snackbar";
-import { ThemeProvider, createTheme } from "@mui/material/styles";
-import CssBaseline from "@mui/material/CssBaseline";
-import Alert from "@mui/material/Alert";
-
 const App = () => {
   const isDesktop = useMediaQuery("(min-width: 1024px)", true);
   const isMobile = !isDesktop;
   const visualViewport = useVisualViewport();
   // Theme follows the data-theme attribute on <html>. Settings updates both
-  // this state and the attribute; we mirror the attribute → MUI palette here
-  // so MUI's CssBaseline doesn't repaint body with its own defaults.
+  // this state and the attribute.
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     document.documentElement.getAttribute("data-theme") === "light"
       ? "light"
@@ -54,38 +48,6 @@ const App = () => {
     document.documentElement.setAttribute("data-theme", next);
     localStorage.setItem("stlvault-theme", next);
   };
-  // MUI palette won't take oklch() — these are sRGB approximations of the
-  // tokens in globals.css.
-  const muiTheme = createTheme({
-    palette:
-      theme === "dark"
-        ? {
-            mode: "dark",
-            background: {
-              default: "rgb(30, 28, 26)", // oklch(0.155 0.005 60) — warm graphite
-              paper: "rgb(46, 43, 40)", // oklch(0.21 0.007 60)
-            },
-            text: {
-              primary: "rgb(244, 240, 232)", // oklch(0.96 0.008 80)
-              secondary: "rgb(195, 188, 175)", // oklch(0.78 0.01 70)
-            },
-          }
-        : {
-            mode: "light",
-            background: {
-              default: "rgb(251, 250, 248)", // oklch(0.985 0.003 80)
-              paper: "rgb(255, 255, 255)", // oklch(1 0 0)
-            },
-            text: {
-              primary: "rgb(48, 46, 43)", // oklch(0.2 0.01 60)
-              secondary: "rgb(108, 105, 100)", // oklch(0.42 0.01 60)
-            },
-          },
-    typography: {
-      fontFamily:
-        '"Geist", system-ui, -apple-system, "Segoe UI", sans-serif',
-    },
-  });
   const [folders, setFolders] = useState<Folder[]>([]);
   const [models, setModels] = useState<STLModel[]>([]);
   const [storageStats, setStorageStats] = useState<StorageStats>({
@@ -700,8 +662,7 @@ const App = () => {
   };
 
   return (
-    <ThemeProvider theme={muiTheme}>
-      <CssBaseline />
+    <>
       <div
         className={`${
           isDesktop ? "flex" : "flex flex-col"
@@ -1291,18 +1252,17 @@ const App = () => {
             </main>
           </>
         )}
-        <Snackbar
-          open={!port ? true : false}
-          autoHideDuration={6000}
-          message="API Host Not Set"
-          anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        >
-          <Alert severity="error" variant="filled" sx={{ width: "100%" }}>
-            API Host Not Set
-          </Alert>
-        </Snackbar>
       </div>
-    </ThemeProvider>
+      {!port && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-md bg-danger text-white text-[13px] font-medium shadow-lifted"
+        >
+          API host not set
+        </div>
+      )}
+    </>
   );
 };
 
