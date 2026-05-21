@@ -4,7 +4,6 @@ import Sidebar from "./components/Sidebar";
 import ModelList from "./components/ModelList";
 import DetailPanel from "./components/DetailPanel";
 import Settings from "./components/Settings";
-import Navbar from "./components/Navbar";
 import { STLModel, Folder, StorageStats, STLModelCollection } from "./types";
 import { generateThumbnail } from "./services/thumbnailGenerator";
 import { api } from "./services/api";
@@ -690,16 +689,6 @@ const App = () => {
           />
         ) : (
           <>
-            {showSettings && (
-              <Navbar
-                title="STL Vault"
-                subtitle="Settings"
-                onOpenSidebar={() => setIsMobileSidebarOpen(true)}
-                onOpenSettings={openSettings}
-                showMenuButton={false}
-              />
-            )}
-
             {isMobileSidebarMounted && (
               <div className="fixed inset-0 z-[70]">
                 <div
@@ -743,7 +732,12 @@ const App = () => {
 
         {/* Settings View */}
         {showSettings ? (
-          <Settings onBack={closeSettings} />
+          <Settings
+            onBack={closeSettings}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
+          />
         ) : (
           <>
             <main className="flex-1 flex overflow-hidden relative">
