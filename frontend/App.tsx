@@ -690,13 +690,15 @@ const App = () => {
           />
         ) : (
           <>
-            <Navbar
-              title="STL Vault"
-              subtitle={showSettings ? "Settings" : currentFolderName}
-              onOpenSidebar={() => setIsMobileSidebarOpen(true)}
-              onOpenSettings={openSettings}
-              showMenuButton={!showSettings}
-            />
+            {showSettings && (
+              <Navbar
+                title="STL Vault"
+                subtitle="Settings"
+                onOpenSidebar={() => setIsMobileSidebarOpen(true)}
+                onOpenSettings={openSettings}
+                showMenuButton={false}
+              />
+            )}
 
             {isMobileSidebarMounted && (
               <div className="fixed inset-0 z-[70]">
@@ -746,12 +748,10 @@ const App = () => {
           <>
             <main className="flex-1 flex overflow-hidden relative">
               {isLoading ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-vault-900 z-50">
+                <div className="absolute inset-0 flex items-center justify-center bg-bg z-50">
                   <div className="flex flex-col items-center gap-4">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-                    <p className="text-slate-400 animate-pulse">
-                      Processing...
-                    </p>
+                    <div className="animate-spin rounded-full h-12 w-12 border-2 border-border border-t-accent"></div>
+                    <p className="text-fg-3 animate-pulse">Processing…</p>
                   </div>
                 </div>
               ) : (
@@ -768,6 +768,9 @@ const App = () => {
                   onSelectModel={(m) => setSelectedModelId(m.id)}
                   onDelete={handleDeleteModel}
                   selectedModelId={selectedModelId}
+                  onOpenMobileSidebar={
+                    !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+                  }
                   // Selection Props
                   selectedIds={selectedIds}
                   onToggleSelection={handleToggleSelection}
