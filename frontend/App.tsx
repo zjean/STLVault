@@ -804,11 +804,13 @@ const App = () => {
                 onClick={() => setSelectedModelId(null)}
               />
 
-              {/* Slide-over panel */}
+              {/* Slide-over panel — right drawer on desktop, bottom sheet on mobile */}
               <div
-                className={`absolute top-0 right-0 h-full transition-transform duration-300 ease-in-out transform ${
-                  selectedModelId ? "translate-x-0" : "translate-x-full"
-                } z-30`}
+                className={`absolute z-30 transition-transform duration-300 ease-out ${
+                  isDesktop
+                    ? `top-0 right-0 h-full ${selectedModelId ? "translate-x-0" : "translate-x-full"}`
+                    : `inset-x-0 bottom-0 top-[60px] rounded-t-[20px] overflow-hidden border-t border-border ${selectedModelId ? "translate-y-0" : "translate-y-full"}`
+                }`}
               >
                 <DetailPanel
                   model={selectedModel}
@@ -818,68 +820,58 @@ const App = () => {
                 />
               </div>
 
-              {/* Floating Action Bar - Moved to App to ensure it is top-level Z-index */}
+              {/* Floating bulk-action bar — top-level z-index */}
               {selectedIds.size > 0 && (
-                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-vault-800 border border-vault-600 shadow-2xl rounded-full px-6 py-3 flex items-center gap-4 z-50 animate-in slide-in-from-bottom-10 duration-200">
-                  <div className="flex items-center gap-2 border-r border-vault-600 pr-4">
-                    <span className="font-bold text-white">
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-surface border border-border shadow-drawer rounded-pill px-5 py-2.5 flex items-center gap-3 z-50">
+                  <div className="flex items-center gap-2 border-r border-border-soft pr-3">
+                    <span className="font-mono text-[13px] font-medium text-fg">
                       {selectedIds.size}
                     </span>
-                    <span className="text-slate-400 text-sm">selected</span>
+                    <span className="text-[12px] text-fg-3">selected</span>
                     <button
                       onClick={() => setSelectedIds(new Set())}
-                      className="ml-2 text-slate-500 hover:text-white"
+                      className="ml-1 w-6 h-6 grid place-items-center rounded text-fg-3 hover:bg-bg-3 hover:text-fg transition-colors"
+                      aria-label="Clear selection"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
                     <button
                       onClick={() => setShowMoveModal(true)}
-                      className="p-2 rounded-full hover:bg-vault-700 text-slate-300 hover:text-blue-400 transition-colors flex items-center gap-2"
-                      title="Move Selected"
+                      className="px-2.5 py-1.5 rounded-md text-fg-2 hover:bg-bg-3 hover:text-fg transition-colors flex items-center gap-1.5 text-[12.5px]"
+                      title="Move selected"
                     >
-                      <FolderInput className="w-4 h-4" />
-                      <span className="text-sm font-medium hidden sm:inline">
-                        Move
-                      </span>
+                      <FolderInput className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Move</span>
                     </button>
-
                     <button
                       onClick={() => {
                         setBulkTags("");
                         setShowTagModal(true);
                       }}
-                      className="p-2 rounded-full hover:bg-vault-700 text-slate-300 hover:text-purple-400 transition-colors flex items-center gap-2"
-                      title="Tag Selected"
+                      className="px-2.5 py-1.5 rounded-md text-fg-2 hover:bg-bg-3 hover:text-fg transition-colors flex items-center gap-1.5 text-[12.5px]"
+                      title="Tag selected"
                     >
-                      <Tags className="w-4 h-4" />
-                      <span className="text-sm font-medium hidden sm:inline">
-                        Tag
-                      </span>
+                      <Tags className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Tag</span>
                     </button>
-
                     <button
                       onClick={handleBulkDownload}
-                      className="p-2 rounded-full hover:bg-vault-700 text-slate-300 hover:text-green-400 transition-colors flex items-center gap-2"
-                      title="Download Selected"
+                      className="px-2.5 py-1.5 rounded-md text-fg-2 hover:bg-bg-3 hover:text-fg transition-colors flex items-center gap-1.5 text-[12.5px]"
+                      title="Download selected"
                     >
-                      <Download className="w-4 h-4" />
-                      <span className="text-sm font-medium hidden sm:inline">
-                        Download
-                      </span>
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Download</span>
                     </button>
-
                     <button
                       onClick={handleBulkDelete}
-                      className="p-2 rounded-full hover:bg-vault-700 text-slate-300 hover:text-red-400 transition-colors flex items-center gap-2"
-                      title="Delete Selected"
+                      className="px-2.5 py-1.5 rounded-md text-fg-2 hover:bg-danger/15 hover:text-danger transition-colors flex items-center gap-1.5 text-[12.5px]"
+                      title="Delete selected"
                     >
-                      <Trash2 className="w-4 h-4" />
-                      <span className="text-sm font-medium hidden sm:inline">
-                        Delete
-                      </span>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Delete</span>
                     </button>
                   </div>
                 </div>
