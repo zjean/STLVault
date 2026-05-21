@@ -1,19 +1,18 @@
 // Modal that lists the signed-in user's liked Makerworld designs and lets
 // them multi-select for bulk import. Fork-only (custom-* path).
 //
-// Auth/expiry: re-uses the same red banner pattern as App.tsx's
-// Import URL modal — when the backend returns the bambu_auth_expired
-// 401, the catch block bubbles the typed error to the caller and the
-// caller flips a flag that this modal renders as the banner.
+// Auth/expiry: when the backend returns the bambu_auth_expired 401, the
+// caller flips a flag we render as the danger-toned banner.
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Heart, X } from "lucide-react";
+import { Heart, FileBox, Check } from "lucide-react";
 import {
   LikedDesign,
   makerworldApi,
   MakerworldAuthExpiredError,
 } from "../../services/custom-importers";
 import { Folder } from "../../types";
+import Dialog from "../Dialog";
 
 interface Props {
   open: boolean;
@@ -45,8 +44,7 @@ const MakerworldLikedModal: React.FC<Props> = ({
   const [folderId, setFolderId] = useState(defaultFolderId);
   const [importing, setImporting] = useState(false);
 
-  // Reset state every time the modal opens. Closing leaves state intact
-  // briefly while the close animation could run; the next open resets.
+  // Reset state every time the modal opens.
   useEffect(() => {
     if (!open) return;
     setItems([]);
@@ -54,36 +52,34 @@ const MakerworldLikedModal: React.FC<Props> = ({
     setHiddenCnt(0);
     setOffset(0);
     setSelected(new Set());
-    setFolderId(defaultFolderId);
+    setFolderId(defaultFolderId || "all");
     setErrorMsg(null);
     setAuthExpired(bambuAuthExpired);
     setImporting(false);
   }, [open, defaultFolderId, bambuAuthExpired]);
 
-  const loadPage = useCallback(
-    async (nextOffset: number) => {
-      setLoading(true);
-      setErrorMsg(null);
-      try {
-        const res = await makerworldApi.listLiked(PAGE_SIZE, nextOffset);
-        setItems((prev) => (nextOffset === 0 ? res.hits : [...prev, ...res.hits]));
-        setTotal(res.total);
-        setHiddenCnt(res.hiddenCnt);
-        setOffset(nextOffset + res.hits.length);
-      } catch (e) {
-        if (e instanceof MakerworldAuthExpiredError) {
-          setAuthExpired(true);
-        } else {
-          setErrorMsg(e instanceof Error ? e.message : "Failed to load");
-        }
-      } finally {
-        setLoading(false);
+  const loadPage = useCallback(async (nextOffset: number) => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await makerworldApi.listLiked(PAGE_SIZE, nextOffset);
+      setItems((prev) =>
+        nextOffset === 0 ? res.hits : [...prev, ...res.hits],
+      );
+      setTotal(res.total);
+      setHiddenCnt(res.hiddenCnt);
+      setOffset(nextOffset + res.hits.length);
+    } catch (e) {
+      if (e instanceof MakerworldAuthExpiredError) {
+        setAuthExpired(true);
+      } else {
+        setErrorMsg(e instanceof Error ? e.message : "Failed to load");
       }
-    },
-    [],
-  );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  // Initial fetch on open (and any time auth changes from expired → not).
   useEffect(() => {
     if (open && !authExpired && items.length === 0 && !loading) {
       loadPage(0);
@@ -110,8 +106,6 @@ const MakerworldLikedModal: React.FC<Props> = ({
       await onImport(picked, folderId);
       onClose();
     } catch (e) {
-      // Caller surfaces auth expiry by flipping the prop; other errors
-      // we leave on screen so the user can decide whether to retry.
       if (e instanceof MakerworldAuthExpiredError) {
         setAuthExpired(true);
       } else {
@@ -124,142 +118,163 @@ const MakerworldLikedModal: React.FC<Props> = ({
 
   if (!open) return null;
 
+  const titleSuffix =
+    total > 0 ? (
+      <span className="font-mono text-[11px] text-fg-3 ml-1">
+        ({items.length}/{total}
+        {hiddenCnt > 0 ? ` · ${hiddenCnt} hidden` : ""})
+      </span>
+    ) : null;
+
   return (
-    <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-center items-center p-4">
-      <div className="relative bg-vault-800 border border-vault-600 rounded-xl p-6 w-full lg:w-3/4 xl:w-2/3 shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
-        <div className="flex justify-between items-center mb-4 shrink-0">
-          <h3 className="text-xl font-bold text-white flex items-center gap-2">
-            <Heart className="w-5 h-5 text-red-400" />
-            Browse Makerworld Liked
-            {total > 0 && (
-              <span className="text-sm font-normal text-slate-400">
-                ({items.length}/{total}
-                {hiddenCnt > 0 ? ` · ${hiddenCnt} hidden` : ""})
-              </span>
+    <Dialog
+      onClose={onClose}
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          Browse Makerworld Liked
+          {titleSuffix}
+        </span>
+      }
+      icon={<Heart size={16} />}
+      size="md"
+      noBodyScroll
+    >
+      <div className="flex flex-col flex-1 min-h-0">
+        {(authExpired || errorMsg) && (
+          <div className="px-5 pt-4 shrink-0">
+            {authExpired && (
+              <div className="px-3.5 py-2.5 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger text-[12.5px]">
+                <p className="font-semibold text-fg mb-0.5">
+                  Bambu Cloud sign-in required
+                </p>
+                <p className="text-fg-2">
+                  Open Settings → Bambu Cloud and sign in to browse your liked
+                  designs.
+                </p>
+              </div>
             )}
-          </h3>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {authExpired && (
-          <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-200 shrink-0">
-            <p className="font-semibold mb-1">Bambu Cloud sign-in required</p>
-            <p className="text-red-300/90">
-              Open Settings &rarr; Bambu Cloud and sign in to browse your
-              liked designs.
-            </p>
+            {errorMsg && !authExpired && (
+              <div className="px-3.5 py-2.5 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger text-[12.5px] text-fg-2">
+                {errorMsg}
+              </div>
+            )}
           </div>
         )}
 
-        {errorMsg && !authExpired && (
-          <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-200 shrink-0">
-            {errorMsg}
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto -mx-2 px-2">
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
           {items.length === 0 && !loading && !authExpired && !errorMsg && (
-            <div className="text-center text-slate-500 py-12">
+            <div className="text-[13px] text-fg-3 text-center py-12">
               No liked designs to show.
             </div>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
-            {items.map((d) => {
-              const isSelected = selected.has(d.designId);
-              return (
-                <button
-                  key={d.designId}
-                  type="button"
-                  onClick={() => toggle(d.designId)}
-                  disabled={!d.isPrintable}
-                  className={`text-left bg-vault-900 border rounded-lg overflow-hidden transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isSelected
-                      ? "border-blue-500 ring-2 ring-blue-500/50"
-                      : "border-vault-700 hover:border-vault-600"
-                  }`}
-                >
-                  <div className="aspect-square bg-vault-900 relative">
-                    {d.coverUrl ? (
-                      <img
-                        src={d.coverUrl}
-                        alt={d.title}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-slate-600 text-xs">
-                        no preview
-                      </div>
-                    )}
-                    {isSelected && (
-                      <div className="absolute top-2 right-2 w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center font-bold">
-                        ✓
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-2">
-                    <p className="text-sm text-white truncate" title={d.title}>
-                      {d.title}
-                    </p>
-                    {d.creatorHandle && (
-                      <p className="text-xs text-slate-500 truncate">
-                        by {d.creatorHandle}
+          {items.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {items.map((d) => {
+                const isSelected = selected.has(d.designId);
+                return (
+                  <button
+                    key={d.designId}
+                    type="button"
+                    onClick={() => toggle(d.designId)}
+                    disabled={!d.isPrintable}
+                    className={`text-left rounded-card overflow-hidden border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? "border-accent bg-accent/5"
+                        : "border-border-soft bg-surface hover:border-border"
+                    }`}
+                  >
+                    <div
+                      className="aspect-square relative"
+                      style={{
+                        background:
+                          "radial-gradient(ellipse at 50% 100%, oklch(var(--accent) / 0.08), transparent 60%), linear-gradient(180deg, oklch(var(--bg-2)), oklch(var(--bg-3)))",
+                      }}
+                    >
+                      {d.coverUrl ? (
+                        <img
+                          src={d.coverUrl}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="absolute inset-0 grid place-items-center text-fg-3">
+                          <FileBox size={28} />
+                        </div>
+                      )}
+                      {isSelected && (
+                        <span
+                          className="absolute top-2 right-2 w-5 h-5 rounded-full grid place-items-center bg-accent text-accent-fg"
+                          aria-hidden
+                        >
+                          <Check size={11} />
+                        </span>
+                      )}
+                    </div>
+                    <div className="px-2.5 py-2">
+                      <p
+                        className="text-[13px] font-medium text-fg truncate"
+                        title={d.title}
+                      >
+                        {d.title}
                       </p>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                      {d.creatorHandle && (
+                        <p className="font-mono text-[11px] text-fg-3 truncate">
+                          by {d.creatorHandle}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {hasMore && !authExpired && (
-            <div className="flex justify-center pt-4 pb-2">
+            <div className="flex justify-center pt-4 pb-1">
               <button
+                type="button"
                 onClick={() => loadPage(offset)}
                 disabled={loading}
-                className="px-4 py-2 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3.5 py-1.5 rounded-md border border-border-soft text-[13px] text-fg-2 hover:bg-bg-3 hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {loading ? "Loading…" : `Load more (${total - items.length} left)`}
+                {loading
+                  ? "Loading…"
+                  : `Load more (${total - items.length} left)`}
               </button>
             </div>
           )}
           {loading && items.length === 0 && (
-            <div className="text-center text-slate-500 py-12">Loading…</div>
+            <div className="text-[13px] text-fg-3 text-center py-12">
+              Loading…
+            </div>
           )}
         </div>
 
-        <div className="mt-4 shrink-0 border-t border-vault-700 pt-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">
+        <div className="px-5 py-3.5 border-t border-border-soft flex flex-col sm:flex-row gap-3 sm:items-end shrink-0">
+          <label className="flex-1 block">
+            <span className="block text-[12.5px] text-fg-3 mb-1.5">
               Destination folder
-            </label>
+            </span>
             <select
-              className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none text-sm"
+              className="w-full bg-surface border border-border-soft rounded-md px-3 py-2 text-[13px] text-fg focus:border-accent outline-none transition-colors"
               value={folderId}
               onChange={(e) => setFolderId(e.target.value)}
             >
-              <option value="" disabled>
-                Select a folder…
-              </option>
+              <option value="all">All Models (root)</option>
               {folders.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
               ))}
             </select>
-          </div>
-          <div className="flex gap-2 sm:items-end">
+          </label>
+          <div className="flex gap-2 justify-end shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 sm:flex-initial px-4 py-2 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors"
+              className="px-3.5 py-1.5 rounded-md border border-border-soft text-fg-2 text-[13px] hover:bg-bg-3 hover:text-fg transition-colors"
             >
               Cancel
             </button>
@@ -269,14 +284,16 @@ const MakerworldLikedModal: React.FC<Props> = ({
               disabled={
                 selected.size === 0 || !folderId || authExpired || importing
               }
-              className="flex-1 sm:flex-initial px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3.5 py-1.5 rounded-md bg-accent text-accent-fg text-[13px] font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
             >
-              {importing ? "Importing…" : `Import ${selected.size || ""}`.trim()}
+              {importing
+                ? "Importing…"
+                : `Import${selected.size > 0 ? ` (${selected.size})` : ""}`}
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 };
 
