@@ -10,6 +10,9 @@ export default defineConfig(({ mode }) => {
   );
   const appVersion = pkgJson.version || "dev";
   const API_URL = "TERA_API_URL";
+  // `npm run dev` proxies /api here; override with
+  // VITE_DEV_API_TARGET=http://localhost:9000 npm run dev if the backend runs elsewhere.
+  const devApiTarget = env.VITE_DEV_API_TARGET || "http://localhost:8000";
   return {
     base: "/",
     preview: {
@@ -19,6 +22,12 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       host: "0.0.0.0",
+      proxy: {
+        "/api": {
+          target: devApiTarget,
+          changeOrigin: true,
+        },
+      },
     },
     define: {
       "import.meta.env.VITE_APP_TAG": JSON.stringify(appVersion),

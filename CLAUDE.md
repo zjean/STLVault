@@ -117,14 +117,9 @@ cd backend && ./run.sh
 cd frontend && npm install && npm run dev
 ```
 
-The Vite config (`frontend/vite.config.ts`) baked the literal string `"TERA_API_URL"` into `import.meta.env.VITE_API_URL` so that container builds can sed-replace it at runtime via `frontend/env.sh`. In `npm run dev` that substitution never happens, so the frontend has no idea where the backend is. The escape hatch lives in `frontend/services/api.ts:6` — open the browser DevTools console once and run:
+The Vite config bakes the literal string `"TERA_API_URL"` into `import.meta.env.VITE_API_URL` so container builds can sed-replace it at runtime via `frontend/env.sh`. In `npm run dev` that placeholder is detected and the frontend uses same-origin `/api/*` paths; `vite.config.ts` proxies those to `http://localhost:8000` (override with `VITE_DEV_API_TARGET=http://localhost:9000 npm run dev` if your backend is on a different port). No `localStorage` dance needed.
 
-```js
-localStorage.setItem("api-port-override", "http://localhost:8000")
-location.reload()
-```
-
-`api.ts` prefers `api-port-override` over the build-time value, so the dev frontend then talks to the local uvicorn. Setting is per-origin and persists across reloads; clear it with `localStorage.removeItem("api-port-override")`.
+If you ever need to point the dev frontend at a remote backend instead, `localStorage.setItem("api-port-override", "https://my-backend.example")` still wins (clear with `localStorage.removeItem("api-port-override")`).
 
 Single-user, no auth (see below) — once both servers are up, the app just works.
 
