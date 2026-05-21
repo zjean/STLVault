@@ -48,6 +48,14 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isDesktopVariant = variant === "desktop";
   const onLibraryRoute = location.pathname === "/";
   const onSettingsRoute = location.pathname === "/settings";
+  const onRecentRoute = location.pathname === "/recent";
+
+  const todayCount = useMemo(() => {
+    const today0 = new Date();
+    today0.setHours(0, 0, 0, 0);
+    const t = today0.getTime();
+    return models.reduce((acc, m) => (m.dateAdded >= t ? acc + 1 : acc), 0);
+  }, [models]);
 
   // Tree interaction state
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -425,15 +433,22 @@ const Sidebar: React.FC<SidebarProps> = ({
         </button>
         <button
           type="button"
-          className={navItemClass(false, true)}
-          disabled
-          title="Coming soon"
+          className={navItemClass(onRecentRoute)}
+          onClick={() => navigate("/recent")}
         >
           <Clock size={16} />
           <span className="flex-1 text-left">Recent</span>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-fg-3">
-            Soon
-          </span>
+          {todayCount > 0 && (
+            <span
+              className={`ml-auto font-mono text-[11px] px-1.5 py-px rounded min-w-[22px] text-center ${
+                onRecentRoute
+                  ? "bg-accent/15 text-accent"
+                  : "bg-bg-3 text-fg-3"
+              }`}
+            >
+              {todayCount}
+            </span>
+          )}
         </button>
         <button
           type="button"
