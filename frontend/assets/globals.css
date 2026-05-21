@@ -1,26 +1,83 @@
-/* global.css */
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* width */
+/* === DESIGN TOKENS ===
+   OKLCH channels stored as raw triplets so Tailwind's `<alpha-value>`
+   placeholder works for utilities like `bg-bg/50`. */
+:root {
+  --accent-h: 65;
+  --accent-c: 0.155;
+  --accent-l: 0.78;
+  --accent: 0.78 0.155 65;
+  --accent-soft: 0.78 0.155 65;
+  --accent-fg: 0.18 0.02 60;
+
+  /* dark — graphite warm (default) */
+  --bg: 0.155 0.005 60;
+  --bg-2: 0.195 0.006 60;
+  --bg-3: 0.235 0.008 60;
+  --surface: 0.21 0.007 60;
+  --surface-2: 0.255 0.008 60;
+  --border: 0.31 0.008 60;
+  --border-soft: 0.31 0.008 60;
+  --fg: 0.96 0.008 80;
+  --fg-2: 0.78 0.01 70;
+  --fg-3: 0.58 0.012 70;
+  --danger: 0.7 0.18 25;
+  --danger-soft: 0.7 0.18 25;
+  --success: 0.78 0.14 155;
+}
+
+html[data-theme="light"] {
+  --bg: 0.985 0.003 80;
+  --bg-2: 0.965 0.004 80;
+  --bg-3: 0.94 0.005 80;
+  --surface: 1 0 0;
+  --surface-2: 0.97 0.004 80;
+  --border: 0.86 0.008 80;
+  --border-soft: 0.9 0.006 80;
+  --fg: 0.2 0.01 60;
+  --fg-2: 0.42 0.01 60;
+  --fg-3: 0.58 0.01 60;
+  --accent-fg: 0.22 0.02 60;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: oklch(var(--bg));
+  color: oklch(var(--fg));
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection {
+  background: oklch(var(--accent) / 0.14);
+  color: oklch(var(--fg));
+}
+
+/* Scrollbar — matches design */
 ::-webkit-scrollbar {
   width: 10px;
+  height: 10px;
 }
-
-/* Track */
-::-webkit-scrollbar-track {
-  background: #000000;
-}
-
-/* Handle */
 ::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 5px;
+  background: oklch(var(--bg-3));
+  border-radius: 999px;
+  border: 2px solid oklch(var(--bg));
 }
-
-/* Handle on hover */
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: oklch(var(--border));
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
