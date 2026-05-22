@@ -15,6 +15,7 @@ import {
   Inbox,
 } from "lucide-react";
 import { Folder, STLModel, StorageStats } from "../types";
+import { resolveApiBase } from "../services/apiBase";
 
 const APP_TAG = import.meta.env.VITE_APP_TAG || "dev";
 
@@ -60,11 +61,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [inboxCount, setInboxCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    const apiBase = () => {
-      const override = localStorage.getItem("api-port-override");
-      if (override) return override + "/api";
-      return import.meta.env.VITE_API_URL + "/api";
-    };
+    const apiBase = resolveApiBase;
     const refresh = async () => {
       try {
         const r = await fetch(`${apiBase()}/centauri/events?reviewed=false&limit=1`);

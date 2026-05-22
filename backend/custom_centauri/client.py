@@ -123,8 +123,18 @@ class CentauriClient:
                 await self._task
 
     async def set_printer_ip(self, ip: str | None) -> None:
-        """Update the configured IP and bounce the connection."""
+        """Update the configured IP and bounce the connection.
+
+        The status snapshot is cleared to a neutral "reconnecting" state
+        — connected=False, last_error=None — so the UI doesn't briefly
+        render a stale red error between the old session ending and the
+        new one establishing. The frontend treats (connected=False,
+        last_error=None, printerIp set) as the connecting state.
+        """
         self._printer_ip = ip or None
+        self._snapshot.connected = False
+        self._snapshot.last_error = None
+        self._snapshot.printer_ip = ip or None
         self._restart_event.set()
         if not self._task or self._task.done():
             await self.start(ip)

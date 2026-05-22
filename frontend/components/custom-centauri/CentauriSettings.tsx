@@ -325,37 +325,48 @@ const CentauriSettings: React.FC = () => {
         </div>
       )}
 
-      {/* Live connection indicator */}
-      {status && saved?.printerIp && (
-        <div className="pt-3 border-t border-border-soft">
-          <div className="flex items-center gap-2 text-[12.5px] text-fg-2">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                status.connected ? "bg-success" : "bg-danger"
-              }`}
-              aria-hidden
-            />
-            <span className="font-medium">
-              {status.connected ? "Connected" : "Disconnected"}
-            </span>
-            {status.mainboardId && (
-              <span className="text-fg-3 font-mono">
-                · MB {status.mainboardId.slice(0, 8)}…
-              </span>
-            )}
-            {status.currentFilename && status.currentStatusCode === 13 && (
-              <span className="text-fg-3">
-                · printing{" "}
-                <span className="text-fg">{status.currentFilename}</span>
-                {status.currentProgress != null ? ` (${status.currentProgress}%)` : ""}
-              </span>
-            )}
-            {!status.connected && status.lastError && (
-              <span className="text-danger ml-1">· {status.lastError}</span>
-            )}
+      {/* Live connection indicator.
+          Three states:
+            - connected → green
+            - connecting (no error, IP configured) → amber, "Connecting…"
+            - disconnected (error present)         → red, error text
+          The connecting state covers the brief reconnect gap after save. */}
+      {status && saved?.printerIp && (() => {
+        const isConnecting = !status.connected && !status.lastError;
+        const dotCls = status.connected
+          ? "bg-success"
+          : isConnecting
+            ? "bg-accent"
+            : "bg-danger";
+        const label = status.connected
+          ? "Connected"
+          : isConnecting
+            ? "Connecting…"
+            : "Disconnected";
+        return (
+          <div className="pt-3 border-t border-border-soft">
+            <div className="flex items-center gap-2 text-[12.5px] text-fg-2">
+              <span className={`w-2 h-2 rounded-full ${dotCls}`} aria-hidden />
+              <span className="font-medium">{label}</span>
+              {status.mainboardId && (
+                <span className="text-fg-3 font-mono">
+                  · MB {status.mainboardId.slice(0, 8)}…
+                </span>
+              )}
+              {status.currentFilename && status.currentStatusCode === 13 && (
+                <span className="text-fg-3">
+                  · printing{" "}
+                  <span className="text-fg">{status.currentFilename}</span>
+                  {status.currentProgress != null ? ` (${status.currentProgress}%)` : ""}
+                </span>
+              )}
+              {!status.connected && status.lastError && (
+                <span className="text-danger ml-1">· {status.lastError}</span>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

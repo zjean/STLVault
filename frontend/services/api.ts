@@ -1,22 +1,8 @@
 import { Folder, STLModel, StorageStats, STLModelCollection } from "../types";
 import { v4 as uuidv4 } from "uuid";
+import { resolveApiBase } from "./apiBase";
 
-let API_BASE_URL = "";
-
-const override = localStorage.getItem("api-port-override");
-if (override) {
-  // Manual override (e.g. talking to a remote backend) wins.
-  API_BASE_URL = override + "/api";
-} else if (import.meta.env.VITE_API_URL === "TERA_API_URL") {
-  // `npm run dev`: the literal placeholder hasn't been substituted, so use
-  // same-origin paths and let Vite's /api proxy forward to the backend.
-  // vite.config.ts → server.proxy["/api"].
-  API_BASE_URL = "/api";
-} else {
-  // Container / preview build: env.sh has replaced VITE_API_URL with the
-  // real host at startup.
-  API_BASE_URL = import.meta.env.VITE_API_URL + "/api";
-}
+const API_BASE_URL = resolveApiBase();
 
 // --- API SERVICE ---
 

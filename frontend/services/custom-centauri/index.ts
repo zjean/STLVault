@@ -1,6 +1,6 @@
 // Fork-only: typed client for /api/centauri/* (Centauri Carbon integration).
-// Mirrors the pattern in services/custom-spoolman/index.ts (apiBase resolver,
-// thin fetch wrappers, custom error class).
+
+import { resolveApiBase } from "../apiBase";
 
 export interface CentauriSettings {
   printerIp: string | null;
@@ -76,11 +76,7 @@ export class CentauriApiError extends Error {
   }
 }
 
-const apiBase = (): string => {
-  const override = localStorage.getItem("api-port-override");
-  if (override) return override + "/api";
-  return import.meta.env.VITE_API_URL + "/api";
-};
+const apiBase = (): string => resolveApiBase();
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {

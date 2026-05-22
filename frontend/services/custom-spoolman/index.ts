@@ -1,21 +1,9 @@
 // Fork-only: typed client for the Spoolman proxy + settings endpoints
 // served by backend/custom_routes/spoolman.py.
-//
-// Mirrors the resolution logic in services/api.ts (localStorage override
-// > VITE_API_URL > /api in `npm run dev`). Duplicating ~10 lines is
-// cheaper than restructuring api.ts to export the resolved base.
 
-let API_BASE_URL = "";
-const override = localStorage.getItem("api-port-override");
-if (override) {
-  API_BASE_URL = override + "/api";
-} else if (import.meta.env.VITE_API_URL === "TERA_API_URL") {
-  API_BASE_URL = "/api";
-} else {
-  API_BASE_URL = import.meta.env.VITE_API_URL + "/api";
-}
+import { resolveApiBase } from "../apiBase";
 
-const BASE = `${API_BASE_URL}/spoolman`;
+const BASE = `${resolveApiBase()}/spoolman`;
 
 // ---- shapes ----
 
