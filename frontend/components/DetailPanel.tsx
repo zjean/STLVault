@@ -199,7 +199,7 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto px-[22px] py-[18px] flex flex-col gap-[22px]">
+      <div className="flex-1 min-h-0 overflow-y-auto px-[22px] py-[18px] flex flex-col gap-[22px]">
         {/* Viewer */}
         <div
           className="relative h-[280px] rounded-[10px] border border-border-soft overflow-hidden grid place-items-center"
