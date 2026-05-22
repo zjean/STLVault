@@ -24,10 +24,12 @@ from importers import printables
 # fork-only: makerworld importer + bambu cloud auth + spoolman integration
 from custom_auth.schema import ensure_bambu_credentials_table
 from custom_spoolman.schema import ensure_spoolman_settings_table
+from custom_prints.schema import ensure_prints_tables
 from custom_routes import (
     bambu_auth as mw_auth_routes,
     makerworld as mw_routes,
     spoolman as spoolman_routes,
+    prints as prints_routes,
 )
 
 DB_PATH = os.getenv("DB_PATH", "data.db")
@@ -113,15 +115,18 @@ _mw_conn = get_db_conn()
 try:
     ensure_bambu_credentials_table(_mw_conn)
     ensure_spoolman_settings_table(_mw_conn)
+    ensure_prints_tables(_mw_conn)
 finally:
     _mw_conn.close()
 mw_auth_routes.set_db_conn_factory(get_db_conn)
 mw_routes.configure(db_conn_factory=get_db_conn, upload_dir=UPLOAD_DIR)
 spoolman_routes.set_db_conn_factory(get_db_conn)
 spoolman_routes.set_upload_dir(UPLOAD_DIR)
+prints_routes.set_db_conn_factory(get_db_conn)
 app.include_router(mw_auth_routes.router)
 app.include_router(mw_routes.router)
 app.include_router(spoolman_routes.router)
+app.include_router(prints_routes.router)
 
 
 def now_ms() -> int:
