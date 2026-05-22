@@ -138,6 +138,11 @@ class SpoolmanClient:
     ) -> Dict[str, Any]:
         """PUT /spool/{id}/use — Spoolman INCREMENTS used_weight; NOT idempotent.
 
+        Spoolman 0.23 rejects requests that include BOTH `use_weight` and
+        `use_length` ("Only specify either use_weight or use_length.").
+        When both are given we prefer weight — Spoolman derives remaining
+        weight from it, which is what the user actually sees in inventory.
+
         Callers must guard against double-fire (STLVault uses the
         `syncedToSpoolman` flag on the prints row).
         """
@@ -146,6 +151,6 @@ class SpoolmanClient:
         body: Dict[str, Any] = {}
         if use_weight is not None:
             body["use_weight"] = use_weight
-        if use_length is not None:
+        elif use_length is not None:
             body["use_length"] = use_length
         return self._request("PUT", f"/spool/{spool_id}/use", json=body)
