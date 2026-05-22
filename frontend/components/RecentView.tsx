@@ -150,7 +150,7 @@ const RecentView: React.FC<RecentViewProps> = ({
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[920px] mx-auto w-full px-4 md:px-7 py-7">
+        <div className="w-full px-4 md:px-7 py-7">
           <div className="mb-8 pb-6 border-b border-border-soft">
             <h2 className="text-[28px] font-semibold -tracking-[0.02em] text-fg m-0">
               Recent activity

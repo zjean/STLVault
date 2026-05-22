@@ -155,7 +155,7 @@ const TagDetailView: React.FC<TagDetailViewProps> = ({
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[1040px] mx-auto w-full px-4 md:px-7 py-7">
+        <div className="w-full px-4 md:px-7 py-7">
           <button
             type="button"
             onClick={onBack}

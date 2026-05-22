@@ -103,6 +103,7 @@ const App = () => {
   const [importFolderId, setImportFolderId] = useState("");
   const [bambuAuthExpired, setBambuAuthExpired] = useState(false);
   const [showLikedModal, setShowLikedModal] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const port = import.meta.env.VITE_API_URL;
   // Delete Confirmation State
   const [deleteConfirmState, setDeleteConfirmState] = useState<{
@@ -335,6 +336,8 @@ const App = () => {
     setImportUrl("");
     setSelectedOptions(new Set());
     setModelsOptions([]);
+    setImportError(null);
+    setBambuAuthExpired(false);
     // Pre-select current folder if specific; otherwise first folder, else root.
     setImportFolderId(
       currentFolderId !== "all"
@@ -346,6 +349,7 @@ const App = () => {
 
   const handleOpenLiked = () => {
     setBambuAuthExpired(false);
+    setImportError(null);
     setShowLikedModal(true);
   };
 
@@ -360,6 +364,8 @@ const App = () => {
     if (picked.length === 0 || !folderId) return;
     setIsLoading(true);
     setBambuAuthExpired(false);
+    setImportError(null);
+    const failures: string[] = [];
     try {
       for (const design of picked) {
         let instances;
@@ -369,6 +375,9 @@ const App = () => {
           console.error(
             `liked import: failed to fetch instances for ${design.title}`,
             e,
+          );
+          failures.push(
+            `${design.title}: ${e instanceof Error ? e.message : "fetch failed"}`,
           );
           continue;
         }
@@ -395,10 +404,17 @@ const App = () => {
               `liked import: failed to import instance ${inst.id} of ${design.title}`,
               e,
             );
+            failures.push(
+              `${design.title} / ${inst.name}: ${e instanceof Error ? e.message : "import failed"}`,
+            );
           } finally {
             setUploadQueue((prev) => Math.max(0, prev - 1));
           }
         }
+      }
+      if (failures.length > 0) {
+        const head = `${failures.length} import${failures.length === 1 ? "" : "s"} failed`;
+        setImportError(`${head}\n${failures.slice(0, 3).join("\n")}${failures.length > 3 ? `\n…and ${failures.length - 3} more` : ""}`);
       }
     } finally {
       setIsLoading(false);
@@ -423,7 +439,11 @@ const App = () => {
       setShowImportOptionsModal(true);
     } catch (error) {
       console.error("Import failed:", error);
-      alert("Failed to import from URL");
+      setImportError(
+        error instanceof Error
+          ? error.message
+          : "Failed to import from URL",
+      );
     }
   };
 
@@ -487,7 +507,11 @@ const App = () => {
         setUploadQueue(0);
       } else {
         console.error("Import failed:", error);
-        alert("Failed to import from URL");
+        setImportError(
+          error instanceof Error
+            ? error.message
+            : "Failed to import from URL",
+        );
       }
     } finally {
       setIsLoading(false);
@@ -1275,6 +1299,26 @@ const App = () => {
           className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-md bg-danger text-white text-[13px] font-medium shadow-lifted"
         >
           API host not set
+        </div>
+      )}
+      {importError && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] max-w-[560px] w-[calc(100%-2rem)] px-4 py-3 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger shadow-lifted flex items-start gap-3"
+        >
+          <div className="flex-1 min-w-0 text-[12.5px] text-fg-2 whitespace-pre-line break-words">
+            <p className="font-semibold text-fg mb-0.5">Import failed</p>
+            {importError}
+          </div>
+          <button
+            type="button"
+            onClick={() => setImportError(null)}
+            className="flex-shrink-0 w-6 h-6 grid place-items-center rounded text-fg-3 hover:text-fg hover:bg-bg-3 transition-colors"
+            aria-label="Dismiss"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
     </>

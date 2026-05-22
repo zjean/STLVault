@@ -155,32 +155,45 @@ const CloudSettings: React.FC = () => {
     setPhase("signed_out");
   };
 
+  const inputCls =
+    "w-full px-3 py-2.5 bg-surface border border-border rounded-lg text-[13px] text-fg outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/15 transition-all placeholder:text-fg-3";
+  const labelCls = "block text-[12.5px] font-medium text-fg-2 mb-1.5";
+  const primaryBtnCls =
+    "inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-accent text-accent-fg text-[13px] font-semibold hover:brightness-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed";
+  const secondaryBtnCls =
+    "inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-surface hover:bg-surface-2 text-[13px] text-fg-2 transition-colors disabled:opacity-50";
+
   return (
-    <div className="mb-8">
-      <div className="flex items-center gap-2 mb-4">
-        <Cloud className="w-5 h-5 text-blue-400" />
-        <h3 className="text-lg font-semibold text-white">Bambu Cloud</h3>
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <Cloud className="w-4 h-4 text-accent" />
+        <h4 className="text-[14px] font-semibold text-fg m-0">Bambu Cloud</h4>
       </div>
-      <p className="text-sm text-slate-400 mb-4">
+      <p className="text-[13px] text-fg-3 mb-4">
         Sign in with your Bambu Lab account to download Makerworld print
-        profiles. Your access token is stored in <code>data.db</code> on this
-        server alongside the email address you sign in with — treat that
-        file as sensitive. Tokens expire after ~3 months; you'll need to
+        profiles. Your access token is stored in{" "}
+        <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">
+          data.db
+        </code>{" "}
+        on this server alongside the email address you sign in with — treat
+        that file as sensitive. Tokens expire after ~3 months; you'll need to
         sign in again then.
       </p>
 
       {phase === "loading" && (
-        <div className="p-4 bg-vault-800 rounded-lg border border-vault-700 text-sm text-slate-400">
+        <div className="px-3.5 py-2.5 rounded-lg border border-border-soft bg-bg-3 text-[13px] text-fg-3">
           Loading sign-in status…
         </div>
       )}
 
       {phase === "expired" && (
-        <div className="mb-4 p-4 bg-red-900/30 border border-red-700/50 rounded-lg flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-red-200">
-            <p className="font-semibold mb-1">Bambu Cloud sign-in expired</p>
-            <p className="text-red-300/90">
+        <div className="mb-4 px-3.5 py-2.5 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-danger mt-0.5 flex-shrink-0" />
+          <div className="text-[12.5px]">
+            <p className="font-semibold text-fg mb-0.5">
+              Bambu Cloud sign-in expired
+            </p>
+            <p className="text-fg-2">
               Your access token has expired. Sign in again to keep importing
               from Makerworld.
             </p>
@@ -190,34 +203,37 @@ const CloudSettings: React.FC = () => {
 
       {(phase === "signed_out" || phase === "expired") && (
         <>
-          <form onSubmit={handleSendCode} className="space-y-3">
-            <label className="block text-sm font-medium text-slate-400">
-              Bambu account email
-            </label>
-            <input
-              type="email"
-              required
-              disabled={busy}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
-            />
+          <form onSubmit={handleSendCode} className="space-y-3 max-w-[480px]">
+            <div>
+              <label htmlFor="bambu-email" className={labelCls}>
+                Bambu account email
+              </label>
+              <input
+                id="bambu-email"
+                type="email"
+                required
+                disabled={busy}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={inputCls}
+              />
+            </div>
             <button
               type="submit"
               disabled={busy || !email}
-              className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              className={primaryBtnCls}
             >
               <Mail className="w-4 h-4" />
               Send verification code
             </button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-vault-700">
+          <div className="mt-6 pt-5 border-t border-border-soft">
             <button
               type="button"
               onClick={() => setPasteOpen((v) => !v)}
-              className="text-sm text-slate-400 hover:text-slate-200 inline-flex items-center gap-2 transition-colors"
+              className="text-[13px] text-fg-3 hover:text-fg inline-flex items-center gap-2 transition-colors"
             >
               <ClipboardPaste className="w-4 h-4" />
               {pasteOpen
@@ -226,9 +242,12 @@ const CloudSettings: React.FC = () => {
             </button>
 
             {pasteOpen && (
-              <form onSubmit={handlePasteToken} className="mt-4 space-y-3">
-                <div className="p-3 bg-vault-800 rounded-lg border border-vault-700 text-xs text-slate-400 leading-relaxed">
-                  <p className="font-semibold text-slate-300 mb-1">
+              <form
+                onSubmit={handlePasteToken}
+                className="mt-4 space-y-3 max-w-[480px]"
+              >
+                <div className="px-3.5 py-2.5 bg-bg-3 border border-border-soft border-l-[3px] border-l-accent rounded-lg text-[12.5px] text-fg-2 leading-relaxed">
+                  <p className="font-semibold text-fg mb-1">
                     For Bambu accounts using Google / Apple / other social
                     login
                   </p>
@@ -238,59 +257,83 @@ const CloudSettings: React.FC = () => {
                       href="https://bambulab.com/"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-indigo-400 hover:underline"
+                      className="text-accent hover:underline"
                     >
                       bambulab.com
                     </a>{" "}
                     in another tab.
                     <br />
                     2. Open DevTools → Application → Cookies → look for{" "}
-                    <code>token</code> (or check Network for an{" "}
-                    <code>Authorization: Bearer …</code> header on a request
-                    to <code>api.bambulab.com</code>).
+                    <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">
+                      token
+                    </code>{" "}
+                    (or check Network for an{" "}
+                    <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">
+                      Authorization: Bearer …
+                    </code>{" "}
+                    header on a request to{" "}
+                    <code className="font-mono text-[11.5px] bg-bg-2 px-1 py-0.5 rounded">
+                      api.bambulab.com
+                    </code>
+                    ).
                     <br />
                     3. Paste the value below. The expiry is read from the JWT
                     automatically.
                   </p>
                 </div>
-                <label className="block text-sm font-medium text-slate-400">
-                  Access token (required)
-                </label>
-                <textarea
-                  required
-                  disabled={busy}
-                  value={pasteToken}
-                  onChange={(e) => setPasteToken(e.target.value)}
-                  placeholder="eyJhbGciOi..."
-                  rows={3}
-                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 font-mono text-xs"
-                />
-                <label className="block text-sm font-medium text-slate-400">
-                  Refresh token (optional — paste if you have it)
-                </label>
-                <textarea
-                  disabled={busy}
-                  value={pasteRefresh}
-                  onChange={(e) => setPasteRefresh(e.target.value)}
-                  placeholder="(leave blank if you only have the access token)"
-                  rows={2}
-                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 font-mono text-xs"
-                />
-                <label className="block text-sm font-medium text-slate-400">
-                  Account email (optional — just for display)
-                </label>
-                <input
-                  type="email"
-                  disabled={busy}
-                  value={pasteEmail}
-                  onChange={(e) => setPasteEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600"
-                />
+                <div>
+                  <label htmlFor="bambu-paste-token" className={labelCls}>
+                    Access token (required)
+                  </label>
+                  <textarea
+                    id="bambu-paste-token"
+                    required
+                    disabled={busy}
+                    value={pasteToken}
+                    onChange={(e) => setPasteToken(e.target.value)}
+                    placeholder="eyJhbGciOi..."
+                    rows={3}
+                    className={`${inputCls} font-mono text-[12px]`}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bambu-paste-refresh" className={labelCls}>
+                    Refresh token{" "}
+                    <span className="font-normal text-fg-3">
+                      (optional — paste if you have it)
+                    </span>
+                  </label>
+                  <textarea
+                    id="bambu-paste-refresh"
+                    disabled={busy}
+                    value={pasteRefresh}
+                    onChange={(e) => setPasteRefresh(e.target.value)}
+                    placeholder="(leave blank if you only have the access token)"
+                    rows={2}
+                    className={`${inputCls} font-mono text-[12px]`}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bambu-paste-email" className={labelCls}>
+                    Account email{" "}
+                    <span className="font-normal text-fg-3">
+                      (optional — just for display)
+                    </span>
+                  </label>
+                  <input
+                    id="bambu-paste-email"
+                    type="email"
+                    disabled={busy}
+                    value={pasteEmail}
+                    onChange={(e) => setPasteEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className={inputCls}
+                  />
+                </div>
                 <button
                   type="submit"
                   disabled={busy || !pasteToken.trim()}
-                  className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                  className={primaryBtnCls}
                 >
                   <ClipboardPaste className="w-4 h-4" />
                   Save token
@@ -302,31 +345,35 @@ const CloudSettings: React.FC = () => {
       )}
 
       {phase === "code_sent" && (
-        <form onSubmit={handleLogin} className="space-y-3">
-          <p className="text-sm text-slate-400">
-            Code sent to <span className="text-white font-medium">{email}</span>
-            . Check your inbox.
+        <form onSubmit={handleLogin} className="space-y-3 max-w-[480px]">
+          <p className="text-[13px] text-fg-3">
+            Code sent to{" "}
+            <span className="text-fg font-medium">{email}</span>. Check your
+            inbox.
           </p>
-          <label className="block text-sm font-medium text-slate-400">
-            6-digit verification code
-          </label>
-          <input
-            type="text"
-            required
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            pattern="[0-9]{4,8}"
-            disabled={busy}
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            placeholder="123456"
-            className="w-full bg-vault-900 border border-vault-700 rounded-md px-3 py-2 text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 tracking-widest"
-          />
-          <div className="flex gap-3 flex-wrap">
+          <div>
+            <label htmlFor="bambu-code" className={labelCls}>
+              6-digit verification code
+            </label>
+            <input
+              id="bambu-code"
+              type="text"
+              required
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{4,8}"
+              disabled={busy}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              placeholder="123456"
+              className={`${inputCls} tracking-widest`}
+            />
+          </div>
+          <div className="flex gap-2 flex-wrap">
             <button
               type="submit"
               disabled={busy || !code}
-              className="py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className={primaryBtnCls}
             >
               Verify & sign in
             </button>
@@ -334,7 +381,7 @@ const CloudSettings: React.FC = () => {
               type="button"
               onClick={handleUseDifferentEmail}
               disabled={busy}
-              className="py-2 px-4 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-200 font-medium transition-colors"
+              className={secondaryBtnCls}
             >
               Didn't receive a code? Use a different email
             </button>
@@ -343,29 +390,33 @@ const CloudSettings: React.FC = () => {
       )}
 
       {phase === "signed_in" && status && (
-        <div className="p-4 bg-vault-800 rounded-lg border border-vault-700 space-y-3">
+        <div className="px-4 py-3 rounded-lg border border-border-soft bg-bg-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm text-slate-400">Signed in as</p>
-              <p className="text-white font-medium">{status.signedInAs || "—"}</p>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-[12px] text-fg-3">Signed in as</p>
+              <p className="text-[14px] text-fg font-medium">
+                {status.signedInAs || "—"}
+              </p>
+              <p className="text-[11.5px] text-fg-3 mt-1">
                 Token expires {formatExpiry(status.accessExpiresAt)}
               </p>
             </div>
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={() => void refreshStatus()}
                 disabled={busy}
-                className="p-2 rounded-lg bg-vault-700 hover:bg-vault-600 text-slate-300"
+                className="p-2 rounded-lg border border-border bg-surface hover:bg-surface-2 text-fg-2 transition-colors disabled:opacity-50"
                 aria-label="Refresh status"
                 title="Refresh status"
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={() => void handleSignOut()}
                 disabled={busy}
-                className="py-2 px-3 rounded-lg bg-vault-700 hover:bg-red-900/40 text-slate-200 hover:text-red-200 font-medium transition-colors inline-flex items-center gap-2"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-surface hover:bg-danger-soft hover:border-danger/40 hover:text-danger text-[13px] text-fg-2 font-medium transition-colors disabled:opacity-50"
               >
                 <LogOut className="w-4 h-4" /> Sign out
               </button>
@@ -375,7 +426,7 @@ const CloudSettings: React.FC = () => {
       )}
 
       {error && (
-        <div className="mt-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-200 whitespace-pre-line">
+        <div className="mt-4 px-3.5 py-2.5 rounded-lg bg-danger-soft border border-danger/40 border-l-[3px] border-l-danger text-[12.5px] text-fg-2 whitespace-pre-line">
           {error}
         </div>
       )}
