@@ -1,0 +1,23 @@
+# Local Spoolman peer for STLVault development.
+#
+# Standalone — does NOT touch the production-style docker-compose.yml at the
+# repo root. Spoolman is reachable from the dev backend at http://localhost:7912.
+#
+# Bring up:    docker compose -f dev/spoolman/docker-compose.yml up -d
+# Seed data:   python dev/spoolman/seed.py
+# Tear down:   docker compose -f dev/spoolman/docker-compose.yml down
+# Reset DB:    docker compose -f dev/spoolman/docker-compose.yml down && rm -rf dev/spoolman/data
+
+services:
+  spoolman:
+    image: ghcr.io/donkie/spoolman:latest
+    container_name: stlvault-dev-spoolman
+    ports:
+      - "7912:8000"
+    environment:
+      - SPOOLMAN_DB_TYPE=sqlite
+      - SPOOLMAN_LOGGING_LEVEL=INFO
+      - TZ=Europe/Amsterdam
+    volumes:
+      - ./data:/home/app/.local/share/spoolman
+    restart: unless-stopped
