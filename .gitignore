@@ -48,3 +48,6 @@ bun.lock
 /backend/data/
 /backend/*.db
 /backend/uploads/
+
+# Local Spoolman dev DB (dev/spoolman/docker-compose.yml)
+/dev/spoolman/data/

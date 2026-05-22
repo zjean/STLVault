@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Menu as MenuIcon, ChevronLeft, Check, Moon, Sun } from "lucide-react";
 import CloudSettings from "./custom-bambu/CloudSettings";
+import SpoolmanSettings from "./custom-spoolman/SpoolmanSettings";
 
 type ThemeMode = "dark" | "light";
 
@@ -263,7 +264,7 @@ const Settings: React.FC<SettingsProps> = ({
           </section>
 
           {/* === Bambu Cloud (fork addition) === */}
-          <section>
+          <section className="mb-9">
             <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
               Bambu Cloud
             </h3>
@@ -273,6 +274,29 @@ const Settings: React.FC<SettingsProps> = ({
             </p>
             <div className="rounded-[10px] border border-border-soft bg-surface p-4">
               <CloudSettings />
+            </div>
+          </section>
+
+          {/* === Spoolman (fork addition) === */}
+          <section>
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              Spoolman
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              Point at your{" "}
+              <a
+                href="https://github.com/Donkie/Spoolman"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent hover:underline"
+              >
+                Spoolman
+              </a>{" "}
+              instance to log prints against real spools and deduct filament
+              automatically.
+            </p>
+            <div className="rounded-[10px] border border-border-soft bg-surface p-4">
+              <SpoolmanSettings />
             </div>
           </section>
         </div>
