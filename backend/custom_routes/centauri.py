@@ -1,0 +1,330 @@
+"""Centauri Carbon REST + SSE routes. Fork-only.
+
+Wired in app.py:
+    from custom_centauri.schema import ensure_centauri_tables
+    from custom_centauri.client import CentauriClient
+    from custom_routes import centauri as centauri_routes
+    ensure_centauri_tables(conn)
+    centauri_routes.configure(db_conn_factory=get_db_conn)
+    app.include_router(centauri_routes.router)
+    # plus start/stop hooks (see Settings PUT handler)
+
+URL prefix `/api/centauri` makes the fork-only surface obvious.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from typing import Any, Callable
+
+import httpx
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from custom_centauri import repo
+from custom_centauri.client import CentauriClient
+from custom_centauri.discovery import discover
+
+log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/centauri", tags=["centauri"])
+
+
+# --- DI ---------------------------------------------------------------------
+
+_db_conn_factory: Callable[..., Any] | None = None
+_client: CentauriClient | None = None
+# In-process broadcast bus for SSE subscribers. Each subscriber gets a queue;
+# publishers fan-out by iterating. List instead of set so order is stable.
+_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+
+
+def configure(*, db_conn_factory: Callable[..., Any], client: CentauriClient) -> None:
+    global _db_conn_factory, _client
+    _db_conn_factory = db_conn_factory
+    _client = client
+
+
+def _db():
+    if _db_conn_factory is None:
+        raise RuntimeError("centauri routes not configured (db factory missing)")
+    return _db_conn_factory()
+
+
+def _need_client() -> CentauriClient:
+    if _client is None:
+        raise RuntimeError("centauri routes not configured (client missing)")
+    return _client
+
+
+def _publish(event: dict[str, Any]) -> None:
+    """Fan a payload out to every SSE subscriber. Best-effort, drops if full."""
+    for q in list(_subscribers):
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            log.debug("centauri SSE: dropping event, subscriber queue full")
+
+
+# --- ingestion bridge -------------------------------------------------------
+
+def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
+    """Build the sync callback the CentauriClient calls per finished job.
+
+    Persists the event then publishes a "new-event" SSE so the inbox
+    badge updates without a poll.
+    """
+
+    def _ingest(event: dict[str, Any]) -> None:
+        if _db_conn_factory is None:
+            log.warning("centauri ingest: db factory not configured, dropping event")
+            return
+        try:
+            row_id = repo.insert_event(_db_conn_factory, event)
+        except Exception:  # noqa: BLE001
+            log.exception("centauri ingest: insert failed")
+            return
+        if row_id is None:
+            log.debug(
+                "centauri ingest: event %s already present, skipping side effects",
+                event.get("sdcpJobId"),
+            )
+            return
+        _publish({"type": "event.new", "eventId": row_id})
+
+    return _ingest
+
+
+# --- models -----------------------------------------------------------------
+
+
+class SettingsIn(BaseModel):
+    printerIp: str | None = Field(default=None, description="LAN address, e.g. 192.168.1.50")
+    printerName: str | None = None
+    printerUuid: str | None = None
+    autoConfirmEnabled: bool | None = None
+
+
+class TestConnectionIn(BaseModel):
+    ip: str
+
+
+class ReviewIn(BaseModel):
+    action: str = Field(pattern=r"^(confirm|dismiss)$")  # Phase 1 only
+    modelId: str | None = None
+    reason: str | None = None
+
+
+# --- /status ----------------------------------------------------------------
+
+
+@router.get("/status")
+def get_status() -> dict[str, Any]:
+    client = _need_client()
+    snap = client.snapshot()
+    return {
+        "connected": snap.connected,
+        "printerIp": snap.printer_ip,
+        "mainboardId": snap.mainboard_id,
+        "lastConnectedAt": snap.last_connected_at,
+        "lastError": snap.last_error,
+        "currentStatusCode": snap.current_status_code,
+        "currentFilename": snap.current_filename,
+        "currentProgress": snap.current_progress,
+        "currentTaskId": snap.current_task_id,
+    }
+
+
+# --- /settings --------------------------------------------------------------
+
+
+@router.get("/settings")
+def get_settings() -> dict[str, Any]:
+    return repo.get_settings(_db)
+
+
+@router.put("/settings")
+async def put_settings(body: SettingsIn) -> dict[str, Any]:
+    # Treat omitted fields as "leave alone"; explicit null overwrites.
+    sent = body.model_dump(exclude_unset=True)
+    updated = repo.update_settings(
+        _db,
+        printer_ip=sent.get("printerIp", ...),
+        printer_name=sent.get("printerName", ...),
+        printer_uuid=sent.get("printerUuid", ...),
+        auto_confirm_enabled=sent.get("autoConfirmEnabled", ...),
+    )
+    # Bounce the client connection if the IP changed.
+    if "printerIp" in sent:
+        await _need_client().set_printer_ip(updated["printerIp"])
+    _publish({"type": "settings.changed"})
+    return updated
+
+
+# --- /test-connection -------------------------------------------------------
+
+
+@router.post("/test-connection")
+async def test_connection(body: TestConnectionIn) -> dict[str, Any]:
+    if not body.ip.strip():
+        raise HTTPException(status_code=400, detail="printer IP is required")
+    return await _need_client().test_connection(body.ip.strip())
+
+
+# --- /discover --------------------------------------------------------------
+
+
+@router.post("/discover")
+async def discover_printers() -> list[dict[str, Any]]:
+    """UDP M99999 broadcast. Returns one entry per responding printer."""
+    found = await discover()
+    return [
+        {
+            "host": p.host,
+            "mainboardId": p.mainboard_id,
+            "name": p.name,
+            "machineName": p.machine_name,
+            "firmwareVersion": p.firmware_version,
+        }
+        for p in found
+    ]
+
+
+# --- /events ----------------------------------------------------------------
+
+
+@router.get("/events")
+def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    return repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
+
+
+@router.get("/events/{event_id}")
+def get_event(event_id: int) -> dict[str, Any]:
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return {
+        "event": ev,
+        "review": repo.get_review(_db, event_id),
+    }
+
+
+@router.get("/events/{event_id}/thumbnail")
+async def event_thumbnail(event_id: int) -> StreamingResponse:
+    """Proxy the printer's history-thumbnail PNG.
+
+    The Centauri exposes `/board-resource/history_image/<task_id>.png` over
+    HTTP on port 80. Proxying through STLVault keeps the frontend on a
+    single origin (same-origin /api/*) and lets us cache + fall back
+    cleanly.
+    """
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    settings = repo.get_settings(_db)
+    ip = settings.get("printerIp")
+    if not ip:
+        raise HTTPException(status_code=503, detail="printer not configured")
+    url = f"http://{ip}/board-resource/history_image/{ev['sdcpJobId']}.png"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            r = await http.get(url)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"printer fetch failed: {e}") from e
+    if r.status_code != 200:
+        raise HTTPException(status_code=404, detail="thumbnail not available")
+    return StreamingResponse(iter([r.content]), media_type="image/png")
+
+
+@router.post("/events/{event_id}/review")
+def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    if body.action == "confirm":
+        if not body.modelId:
+            raise HTTPException(
+                status_code=400, detail="modelId is required for confirm"
+            )
+        # Validate the model exists. Soft check against the upstream
+        # models table.
+        conn = _db()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM models WHERE id = ?", (body.modelId,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail="model not found")
+        print_id = repo.create_print_log_from_event(_db, ev, body.modelId)
+        review = repo.upsert_review(
+            _db,
+            event_id,
+            action="confirm",
+            resulting_print_id=print_id,
+            resulting_model_id=body.modelId,
+        )
+    elif body.action == "dismiss":
+        review = repo.upsert_review(
+            _db,
+            event_id,
+            action="dismiss",
+            reason=body.reason,
+        )
+    else:
+        # Defensive; pattern validates this but be explicit.
+        raise HTTPException(status_code=400, detail=f"unknown action: {body.action}")
+
+    _publish({"type": "event.reviewed", "eventId": event_id, "action": body.action})
+    return review
+
+
+# --- /events/stream (SSE) ---------------------------------------------------
+
+
+@router.get("/events/stream")
+async def events_stream() -> StreamingResponse:
+    """Server-Sent Events stream for inbox badge + status changes.
+
+    Emits JSON-encoded payloads:
+      {"type":"event.new","eventId":...}
+      {"type":"event.reviewed","eventId":...,"action":"confirm"|"dismiss"}
+      {"type":"status","connected":...}
+      {"type":"settings.changed"}
+    """
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
+    _subscribers.append(queue)
+
+    async def stream():
+        try:
+            # initial state push so the badge appears immediately
+            initial = {"type": "inbox.count", "count": repo.count_unreviewed(_db)}
+            yield f"data: {json.dumps(initial)}\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    # keepalive — comments are ignored by EventSource clients
+                    yield ": keepalive\n\n"
+        finally:
+            try:
+                _subscribers.remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering
+        },
+    )
