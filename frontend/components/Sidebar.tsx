@@ -11,6 +11,7 @@ import {
   Settings as SettingsIcon,
   Clock,
   Tag,
+  Printer,
 } from "lucide-react";
 import { Folder, STLModel, StorageStats } from "../types";
 
@@ -50,6 +51,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const onSettingsRoute = location.pathname === "/settings";
   const onRecentRoute = location.pathname === "/recent";
   const onTagsRoute = location.pathname.startsWith("/tags");
+  const onPrintsRoute = location.pathname === "/prints";
 
   const todayCount = useMemo(() => {
     const today0 = new Date();
@@ -477,6 +479,14 @@ const Sidebar: React.FC<SidebarProps> = ({
               {tagCount}
             </span>
           )}
+        </button>
+        <button
+          type="button"
+          className={navItemClass(onPrintsRoute)}
+          onClick={() => navigate("/prints")}
+        >
+          <Printer size={16} />
+          <span className="flex-1 text-left">Prints</span>
         </button>
         <button
           type="button"

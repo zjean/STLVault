@@ -145,6 +145,8 @@ export const printsApi = {
     status?: PrintStatus;
     spoolId?: number;
     modelId?: string;
+    sinceMs?: number;
+    untilMs?: number;
   }): Promise<Print[]> => {
     const qs = new URLSearchParams();
     if (params?.limit != null) qs.set("limit", String(params.limit));
@@ -152,7 +154,21 @@ export const printsApi = {
     if (params?.status) qs.set("status", params.status);
     if (params?.spoolId != null) qs.set("spoolId", String(params.spoolId));
     if (params?.modelId) qs.set("modelId", params.modelId);
+    if (params?.sinceMs != null) qs.set("sinceMs", String(params.sinceMs));
+    if (params?.untilMs != null) qs.set("untilMs", String(params.untilMs));
     const url = `${API_BASE_URL}/prints${qs.toString() ? `?${qs}` : ""}`;
     return jsonOrThrow(await fetch(url));
+  },
+
+  rollup: async (sinceMs: number, untilMs?: number): Promise<{
+    count: number;
+    totalMinutes: number;
+    totalWeightG: number;
+  }> => {
+    const qs = new URLSearchParams({ sinceMs: String(sinceMs) });
+    if (untilMs != null) qs.set("untilMs", String(untilMs));
+    return jsonOrThrow(
+      await fetch(`${API_BASE_URL}/prints/stats/rollup?${qs.toString()}`),
+    );
   },
 };
