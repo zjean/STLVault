@@ -17,6 +17,7 @@ import {
 
 import { generateThumbnail } from "../services/thumbnailGenerator";
 import { api } from "../services/api";
+import ModelPrintsSection from "./custom-spoolman/ModelPrintsSection";
 
 interface DetailPanelProps {
   model: STLModel | null;
@@ -511,6 +512,9 @@ const DetailPanel: React.FC<DetailPanelProps> = ({
             </button>
           </div>
         )}
+
+        {/* Prints (fork addition) */}
+        <ModelPrintsSection model={model} />
 
         {/* Danger zone */}
         <section className="mt-auto pt-3.5 border-t border-border-soft">
