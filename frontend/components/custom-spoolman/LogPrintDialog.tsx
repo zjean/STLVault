@@ -306,11 +306,17 @@ const LogPrintDialog: React.FC<Props> = ({
 
       let result: { print: Print; sync: SyncResult };
       if (mode === "complete" && existingPrint) {
+        // Address the exact filament leg we're updating by its row id.
+        // Disambiguates same-spool-twice prints.
+        const targetLeg =
+          existingPrint.filaments.find((f) => f.spoolId === form.spoolId) ??
+          existingPrint.filaments[0];
         result = await printsApi.complete(existingPrint.id, {
           status: form.status,
           filaments: [
             {
               spoolId: form.spoolId,
+              filamentRowId: targetLeg?.id,
               // Send used* for any terminal status — a failed print that
               // ate 28g still left 28g off the spool, and the user may
               // have weighed it. Status is outcome, not consumption.

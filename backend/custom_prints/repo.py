@@ -272,6 +272,33 @@ def update_print_fields(
     return cur.rowcount > 0
 
 
+def update_filament_used_by_id(
+    conn: sqlite3.Connection,
+    *,
+    filament_row_id: str,
+    used_weight_g: Optional[float],
+    used_length_mm: Optional[float],
+) -> int:
+    """Set used* on the filament row identified by its row id.
+
+    Returns the number of rows updated (0 if filament_row_id doesn't
+    exist). This is the canonical update path — keys by the same id
+    that :func:`mark_filament_consumed_by_id` uses, so completion and
+    consume operations agree about which row they're talking about
+    even when the same spool appears more than once in a print.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE custom_print_filaments
+        SET usedWeightG = ?, usedLengthMm = ?
+        WHERE id = ?
+        """,
+        (used_weight_g, used_length_mm, filament_row_id),
+    )
+    return cur.rowcount
+
+
 def update_filament_used_by_spool(
     conn: sqlite3.Connection,
     print_id: str,
@@ -282,11 +309,11 @@ def update_filament_used_by_spool(
 ) -> None:
     """Set used* on the first filament row matching (printId, spoolId).
 
-    Used by the complete-print path where the client supplies updates
-    keyed by spool. Today the dialog always sends a single filament row,
-    so (printId, spoolId) is unique. The repo guards against future
-    same-spool-twice prints by limiting the UPDATE to one row via
-    ``LIMIT 1`` ordered by id.
+    Fallback used only when the client didn't supply a filament row id.
+    Picks the lowest-id row when multiple match — fine when the UI is
+    single-filament-per-print, ambiguous under multi-spool. New clients
+    should send filamentRowId and route through
+    :func:`update_filament_used_by_id` instead.
     """
     cur = conn.cursor()
     cur.execute(
@@ -300,6 +327,29 @@ def update_filament_used_by_spool(
         )
         """,
         (used_weight_g, used_length_mm, print_id, spool_id),
+    )
+
+
+def backfill_filament_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    filament_row_id: str,
+    spool_label: Optional[str],
+    filament_color: Optional[str],
+) -> None:
+    """Fill in spoolLabel / filamentColor for a leg that was created
+    while Spoolman was unreachable. Only writes columns that are still
+    NULL — never overwrites an existing snapshot. Used by /resync.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE custom_print_filaments
+        SET spoolLabel = COALESCE(spoolLabel, ?),
+            filamentColor = COALESCE(filamentColor, ?)
+        WHERE id = ?
+        """,
+        (spool_label, filament_color, filament_row_id),
     )
 
 
@@ -340,7 +390,24 @@ def delete_print(conn: sqlite3.Connection, print_id: str) -> bool:
 def rollup_window(
     conn: sqlite3.Connection, *, since_ms: int, until_ms: Optional[int] = None
 ) -> Dict[str, Any]:
-    """Aggregate totals for a time window. Used by the history view in PR 3."""
+    """Aggregate totals for a time window.
+
+    Returns ``{count, totalMinutes, totalWeightG}``. The fields are
+    sums of completed prints' per-row preferred values:
+
+    - ``totalMinutes`` per row = ``actDurationMin`` if the user entered
+      one, else ``estDurationMin`` (the slicer's prediction), else 0.
+      These are NOT the same physical quantity: slicer estimates are
+      active extrusion time, while user-entered values are typically
+      wall-clock start-to-finish. The rollup mixes them on purpose —
+      a single rough "time spent printing" figure is more useful in
+      the dashboard than two empty cards. If you need precision, the
+      per-print rows on the history view carry both values separately.
+
+    - ``totalWeightG`` per row = ``usedWeightG`` if set, else
+      ``estWeightG``. These are the same physical quantity (mass of
+      filament that left the spool), just measured vs. predicted.
+    """
     cur = conn.cursor()
     where = "COALESCE(p.completedAt, p.startedAt, p.createdAt) >= ?"
     params: List[Any] = [since_ms]
