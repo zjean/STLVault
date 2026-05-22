@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from custom_centauri import repo
+from custom_centauri import matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
 
@@ -94,6 +94,15 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
                 event.get("sdcpJobId"),
             )
             return
+        # Run the matcher synchronously so the inbox never shows a fresh
+        # event with zero candidates.
+        try:
+            n = matcher.run_all_signals(
+                _db_conn_factory, row_id, event.get("gcodeFilename", "")
+            )
+            log.info("centauri matcher: event %s — %d candidate(s)", row_id, n)
+        except Exception:  # noqa: BLE001
+            log.exception("centauri matcher: failed (event=%s)", row_id)
         _publish({"type": "event.new", "eventId": row_id})
 
     return _ingest
@@ -195,11 +204,62 @@ async def discover_printers() -> list[dict[str, Any]]:
 
 
 # --- /events ----------------------------------------------------------------
+#
+# Route ordering matters here: FastAPI resolves in declaration order, so
+# the literal `/events/stream` MUST be declared before the parameterised
+# `/events/{event_id}` — otherwise "stream" gets matched as a (non-int)
+# event_id and the framework returns 422 before our handler runs.
+
+
+@router.get("/events/stream")
+async def events_stream() -> StreamingResponse:
+    """Server-Sent Events stream for inbox badge + status changes.
+
+    Emits JSON-encoded payloads:
+      {"type":"event.new","eventId":...}
+      {"type":"event.reviewed","eventId":...,"action":"confirm"|"dismiss"}
+      {"type":"status","connected":...}
+      {"type":"settings.changed"}
+      {"type":"inbox.count","count":N}
+    """
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
+    _subscribers.append(queue)
+
+    async def stream():
+        try:
+            initial = {"type": "inbox.count", "count": repo.count_unreviewed(_db)}
+            yield f"data: {json.dumps(initial)}\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            try:
+                _subscribers.remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/events")
 def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    return repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
+    events = repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
+    # Embed candidates per event. List sizes are bounded (≤ a handful per
+    # event), so a single round-trip beats per-event lookups from the UI.
+    for ev in events:
+        ev["candidates"] = matcher.list_candidates(_db, ev["id"])
+    return events
 
 
 @router.get("/events/{event_id}")
@@ -210,6 +270,7 @@ def get_event(event_id: int) -> dict[str, Any]:
     return {
         "event": ev,
         "review": repo.get_review(_db, event_id),
+        "candidates": matcher.list_candidates(_db, event_id),
     }
 
 
@@ -285,46 +346,5 @@ def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
     return review
 
 
-# --- /events/stream (SSE) ---------------------------------------------------
-
-
-@router.get("/events/stream")
-async def events_stream() -> StreamingResponse:
-    """Server-Sent Events stream for inbox badge + status changes.
-
-    Emits JSON-encoded payloads:
-      {"type":"event.new","eventId":...}
-      {"type":"event.reviewed","eventId":...,"action":"confirm"|"dismiss"}
-      {"type":"status","connected":...}
-      {"type":"settings.changed"}
-    """
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
-    _subscribers.append(queue)
-
-    async def stream():
-        try:
-            # initial state push so the badge appears immediately
-            initial = {"type": "inbox.count", "count": repo.count_unreviewed(_db)}
-            yield f"data: {json.dumps(initial)}\n\n"
-            while True:
-                try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
-                    yield f"data: {json.dumps(msg)}\n\n"
-                except asyncio.TimeoutError:
-                    # keepalive — comments are ignored by EventSource clients
-                    yield ": keepalive\n\n"
-        finally:
-            try:
-                _subscribers.remove(queue)
-            except ValueError:
-                pass
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable proxy buffering
-        },
-    )
+# (SSE handler lives at the top of the /events block — must be declared
+# before the parameterised /events/{event_id} so the literal route wins.)

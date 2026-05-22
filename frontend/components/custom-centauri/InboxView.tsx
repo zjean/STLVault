@@ -14,7 +14,8 @@ import {
 import {
   centauriApi,
   CentauriApiError,
-  PrintEvent,
+  MatchCandidate,
+  PrintEventWithCandidates,
 } from "../../services/custom-centauri";
 import { STLModel } from "../../types";
 
@@ -38,7 +39,9 @@ const fmtDuration = (min: number | null | undefined): string => {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 };
 
-const outcomeChipCls = (outcome: PrintEvent["outcome"]): string => {
+const outcomeChipCls = (
+  outcome: PrintEventWithCandidates["outcome"],
+): string => {
   switch (outcome) {
     case "completed":
       return "bg-success/15 text-success";
@@ -54,9 +57,9 @@ const InboxView: React.FC<InboxViewProps> = ({
   onOpenMobileSidebar,
   onBack,
 }) => {
-  const [events, setEvents] = useState<PrintEvent[] | null>(null);
+  const [events, setEvents] = useState<PrintEventWithCandidates[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pickerOpenFor, setPickerOpenFor] = useState<PrintEvent | null>(null);
+  const [pickerOpenFor, setPickerOpenFor] = useState<PrintEventWithCandidates | null>(null);
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
 
   const refresh = useCallback(async () => {
@@ -214,6 +217,7 @@ const InboxView: React.FC<InboxViewProps> = ({
                   key={ev.id}
                   event={ev}
                   busy={busyIds.has(ev.id)}
+                  onConfirm={(modelId) => void handleConfirm(ev.id, modelId)}
                   onPickModel={() => setPickerOpenFor(ev)}
                   onDismiss={() => void handleDismiss(ev.id)}
                 />
@@ -238,13 +242,24 @@ const InboxView: React.FC<InboxViewProps> = ({
 
 // ---------------------------------------------------------------- EventCard
 
+const confidenceTone = (
+  conf: number,
+): { dot: string; ring: string; label: string } => {
+  if (conf >= 0.7) return { dot: "bg-success", ring: "border-success/40", label: "strong" };
+  if (conf >= 0.4) return { dot: "bg-accent", ring: "border-accent/40", label: "weak" };
+  return { dot: "bg-danger", ring: "border-danger/40", label: "trace" };
+};
+
 const EventCard: React.FC<{
-  event: PrintEvent;
+  event: PrintEventWithCandidates;
   busy: boolean;
+  onConfirm: (modelId: string) => void;
   onPickModel: () => void;
   onDismiss: () => void;
-}> = ({ event, busy, onPickModel, onDismiss }) => {
+}> = ({ event, busy, onConfirm, onPickModel, onDismiss }) => {
   const [thumbErrored, setThumbErrored] = useState(false);
+  const candidates = event.candidates ?? [];
+  const topCandidate = candidates[0] as MatchCandidate | undefined;
 
   return (
     <article className="rounded-card border border-border-soft bg-surface p-3.5 flex gap-4">
@@ -290,14 +305,71 @@ const EventCard: React.FC<{
           </span>
         </div>
 
+        {/* Match suggestions. One chip per candidate — clicking a chip
+            confirms that match immediately. The chip's coloured dot
+            communicates confidence. When the matcher returns multiple
+            hits at the same confidence we render them all so the user
+            can pick the right one without opening the search picker. */}
+        {candidates.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            <span className="text-[11px] text-fg-3 self-center mr-1">
+              Suggested:
+            </span>
+            {candidates.slice(0, 4).map((c) => {
+              const tone = confidenceTone(c.confidence);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onConfirm(c.modelId)}
+                  title={c.reason ?? undefined}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border ${tone.ring} bg-bg-3 hover:bg-surface-2 text-[12px] text-fg transition-colors disabled:opacity-50`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${tone.dot}`}
+                    aria-hidden
+                  />
+                  <span className="truncate max-w-[180px]">
+                    {c.modelName ?? "(deleted)"}
+                  </span>
+                  <span className="text-fg-3 font-mono">
+                    {Math.round(c.confidence * 100)}%
+                  </span>
+                </button>
+              );
+            })}
+            {candidates.length > 4 && (
+              <span className="self-center text-[11px] text-fg-3">
+                +{candidates.length - 4} more
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-2 pt-1 flex-wrap">
+          {topCandidate && candidates.length === 1 ? (
+            <button
+              type="button"
+              onClick={() => onConfirm(topCandidate.modelId)}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-accent text-accent-fg text-[12.5px] font-semibold hover:brightness-105 transition-all disabled:opacity-50"
+            >
+              <Check size={13} /> Confirm match
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onPickModel}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-accent text-accent-fg text-[12.5px] font-semibold hover:brightness-105 transition-all disabled:opacity-50"
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12.5px] transition-colors disabled:opacity-50 ${
+              topCandidate && candidates.length === 1
+                ? "border border-border bg-surface hover:bg-surface-2 text-fg-2"
+                : "bg-accent text-accent-fg font-semibold hover:brightness-105"
+            }`}
           >
-            <Check size={13} /> Confirm…
+            <Check size={13} />{" "}
+            {candidates.length === 0 ? "Pick model…" : "Pick a different model…"}
           </button>
           <button
             type="button"
@@ -321,7 +393,7 @@ const EventCard: React.FC<{
 // ------------------------------------------------------------ ModelPicker
 
 const ModelPicker: React.FC<{
-  event: PrintEvent;
+  event: PrintEventWithCandidates;
   models: STLModel[];
   busy: boolean;
   onCancel: () => void;

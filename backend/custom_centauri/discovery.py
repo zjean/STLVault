@@ -68,7 +68,12 @@ async def discover(
     port: int = DISCOVERY_PORT,
     retries: int = 3,
 ) -> list[DiscoveredPrinter]:
-    """Broadcast M99999 and collect responders. Returns one entry per host."""
+    """Broadcast M99999 and collect responders. Returns one entry per host.
+
+    Use `probe_one(host)` instead if you already know the printer's IP and
+    just want its mainboard ID — unicast is more reliable than broadcast
+    on WiFi networks where mDNS-style broadcast can be dropped.
+    """
     loop = asyncio.get_running_loop()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -94,3 +99,44 @@ async def discover(
         transport.close()
 
     return list(protocol.results.values())
+
+
+async def probe_one(
+    host: str,
+    *,
+    timeout: float = 2.0,
+    port: int = DISCOVERY_PORT,
+    retries: int = 2,
+) -> DiscoveredPrinter | None:
+    """Unicast M99999 to a known IP. Returns its DiscoveredPrinter or None.
+
+    Bypasses broadcast (which routers happily drop) when you already
+    know the printer's IP. The Centauri Carbon answers unicast probes
+    on the same UDP port. Used by the WS client on connect to learn
+    the mainboard ID without depending on flaky LAN broadcast.
+    """
+    loop = asyncio.get_running_loop()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 0))
+    sock.setblocking(False)
+    transport, protocol = await loop.create_datagram_endpoint(
+        _DiscoveryProtocol, sock=sock
+    )
+    try:
+        tries = max(1, retries)
+        interval = timeout / max(tries, 1) / 2
+        for _ in range(tries):
+            transport.sendto(DISCOVERY_PROBE, (host, port))
+            await asyncio.sleep(interval)
+        remaining = max(0.0, timeout - interval * tries)
+        if remaining:
+            await asyncio.sleep(remaining)
+    finally:
+        transport.close()
+    # Prefer the result matching `host`; some routers SNAT-rewrite source addrs.
+    if host in protocol.results:
+        return protocol.results[host]
+    if protocol.results:
+        return next(iter(protocol.results.values()))
+    return None

@@ -309,19 +309,23 @@ def create_print_log_from_event(
 ) -> str:
     """Write a `custom_prints` row for a confirmed event.
 
-    Phase-1 confirm writes a minimal row — status='logged', source='centauri',
-    timing from the event, no filament rows yet (filament weight is
-    file-derived and we don't have it in Phase 1). User can edit/log
-    filament manually via the existing ModelPrintsSection editor.
+    Maps the centauri event outcome to the existing custom_prints
+    status taxonomy used by ModelPrintsSection:
+      'completed' → 'completed'  (green check)
+      'failed'    → 'failed'     (red X)
+      'cancelled' → 'cancelled'  (grey slash — fallback branch in the UI
+                                  IIFE, intentional)
+    Timing comes from the event; no filament rows yet (file-derived,
+    deferred to Phase 2 with .gcode.3mf parsing). The user can fill in
+    filament manually via the existing editor.
     """
     print_id = str(uuid.uuid4())
     now = int(time.time())
     started_ms = (event["startedAt"] or now) * 1000
     completed_ms = (event["endedAt"] or now) * 1000
 
-    # custom_prints uses 'logged' / 'started' / 'completed' status values
-    # (see custom_prints/schema.py). 'logged' matches manual entries.
-    status = "logged"
+    outcome = event.get("outcome", "completed")
+    status = outcome if outcome in {"completed", "failed", "cancelled"} else "completed"
     conn = db()
     try:
         conn.execute(
