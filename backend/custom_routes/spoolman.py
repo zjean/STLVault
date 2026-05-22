@@ -14,11 +14,24 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
+
+# Cap parse-slice uploads at 100 MB. .gcode files for an hour-long print
+# sit around 5–20 MB; .3mf around 1–5 MB. 100 MB is generous for the
+# legitimate case and small enough to bound memory under abuse.
+PARSE_SLICE_MAX_BYTES = 100 * 1024 * 1024
+
+# Only accept canonical UUID-shape model ids. Matches the format produced
+# by uuid.uuid4() in app.py. Pre-empts partial-prefix matches against
+# unintended files in UPLOAD_DIR.
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 from custom_spoolman import settings as ss
 from custom_spoolman.client import SpoolmanClient, SpoolmanError
@@ -138,6 +151,10 @@ def get_settings():
 @router.put("/settings")
 def put_settings(body: SettingsBody):
     base_url = (body.baseUrl or "").strip() or None
+    # An "enabled but no base URL" row is unusable — surface that intent
+    # in the DB rather than persisting a misleading state the user can
+    # later trip over while debugging.
+    enabled = bool(body.enabled) and base_url is not None
     # Preserve existing api_key if the field is sent empty AND a key exists
     # (so the UI doesn't need to round-trip the secret).
     api_key = body.apiKey
@@ -149,7 +166,7 @@ def put_settings(body: SettingsBody):
         else:
             api_key = api_key.strip() or None
         saved = ss.upsert(
-            conn, base_url=base_url, api_key=api_key, enabled=bool(body.enabled)
+            conn, base_url=base_url, api_key=api_key, enabled=enabled
         )
     finally:
         conn.close()
@@ -230,30 +247,57 @@ def parse_slice(
 
     if file is not None:
         try:
-            blob = file.file.read()
+            # Read with a hard cap (+1 byte to detect overflow without
+            # loading the whole oversized payload into memory).
+            blob = file.file.read(PARSE_SLICE_MAX_BYTES + 1)
         finally:
             file.file.close()
+        if len(blob) > PARSE_SLICE_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Slicer file exceeds {PARSE_SLICE_MAX_BYTES // (1024 * 1024)} MB cap.",
+            )
         md = parse_file_bytes(file.filename or "", blob)
         return _slice_md_to_dto(md, source=file.filename or "(uploaded)")
 
     # modelId path: reuse the storage layout from app.py (file name starts
     # with model id). We do NOT import app to avoid a circular dep; instead
     # the caller passed us the upload dir at startup.
+    if not _UUID_RE.match(modelId):
+        raise HTTPException(status_code=400, detail="Invalid modelId shape.")
     if _upload_dir is None:
         raise HTTPException(
             status_code=500, detail="Upload directory not configured."
         )
     matched = None
+    # Match by exact UUID-prefix + dot to dodge partial-prefix collisions
+    # against any unrelated files that might end up in UPLOAD_DIR.
+    needle = f"{modelId}."
     for fname in os.listdir(_upload_dir):
-        if fname.startswith(modelId):
+        if fname.startswith(needle):
             matched = fname
             break
     if not matched:
         raise HTTPException(status_code=404, detail="Model file not found on disk.")
     path = _upload_dir / matched
     try:
+        size = os.path.getsize(path)
+        if size > PARSE_SLICE_MAX_BYTES:
+            # File is on disk and big — parse only the head we need. The
+            # gcode-header regex is bounded inside slicer_parse, but a
+            # huge .3mf zip-header is rejected here so we never load it
+            # into memory.
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Stored file exceeds {PARSE_SLICE_MAX_BYTES // (1024 * 1024)} "
+                    "MB cap — upload a sliced file instead."
+                ),
+            )
         with open(path, "rb") as fh:
-            blob = fh.read()
+            blob = fh.read(PARSE_SLICE_MAX_BYTES)
+    except HTTPException:
+        raise
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Cannot read model file: {e}")
     md = parse_file_bytes(matched, blob)
