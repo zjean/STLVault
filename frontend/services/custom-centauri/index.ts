@@ -52,6 +52,21 @@ export interface PrintReview {
   resultingModelId: string | null;
 }
 
+export interface MatchCandidate {
+  id: number;
+  eventId: number;
+  modelId: string;
+  signal: "filename" | "source_hash" | "recent_slicer_open";
+  confidence: number;
+  reason: string | null;
+  modelName: string | null;
+  modelThumbnail: string | null;
+}
+
+export interface PrintEventWithCandidates extends PrintEvent {
+  candidates: MatchCandidate[];
+}
+
 export interface DiscoveredPrinter {
   host: string;
   mainboardId: string | null;
@@ -124,7 +139,7 @@ export const centauriApi = {
     );
   },
 
-  async listEvents(reviewed?: boolean, limit = 100): Promise<PrintEvent[]> {
+  async listEvents(reviewed?: boolean, limit = 100): Promise<PrintEventWithCandidates[]> {
     const params = new URLSearchParams();
     if (reviewed !== undefined) params.set("reviewed", String(reviewed));
     params.set("limit", String(limit));
@@ -133,7 +148,11 @@ export const centauriApi = {
     );
   },
 
-  async getEvent(id: number): Promise<{ event: PrintEvent; review: PrintReview | null }> {
+  async getEvent(id: number): Promise<{
+    event: PrintEvent;
+    review: PrintReview | null;
+    candidates: MatchCandidate[];
+  }> {
     return jsonOrThrow(await fetch(`${apiBase()}/centauri/events/${id}`));
   },
 

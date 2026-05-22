@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from custom_centauri import repo
+from custom_centauri import matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
 
@@ -94,6 +94,15 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
                 event.get("sdcpJobId"),
             )
             return
+        # Run the matcher synchronously so the inbox never shows a fresh
+        # event with zero candidates.
+        try:
+            n = matcher.run_all_signals(
+                _db_conn_factory, row_id, event.get("gcodeFilename", "")
+            )
+            log.info("centauri matcher: event %s — %d candidate(s)", row_id, n)
+        except Exception:  # noqa: BLE001
+            log.exception("centauri matcher: failed (event=%s)", row_id)
         _publish({"type": "event.new", "eventId": row_id})
 
     return _ingest
@@ -199,7 +208,12 @@ async def discover_printers() -> list[dict[str, Any]]:
 
 @router.get("/events")
 def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    return repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
+    events = repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
+    # Embed candidates per event. List sizes are bounded (≤ a handful per
+    # event), so a single round-trip beats per-event lookups from the UI.
+    for ev in events:
+        ev["candidates"] = matcher.list_candidates(_db, ev["id"])
+    return events
 
 
 @router.get("/events/{event_id}")
@@ -210,6 +224,7 @@ def get_event(event_id: int) -> dict[str, Any]:
     return {
         "event": ev,
         "review": repo.get_review(_db, event_id),
+        "candidates": matcher.list_candidates(_db, event_id),
     }
 
 

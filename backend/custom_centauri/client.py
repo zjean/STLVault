@@ -237,7 +237,20 @@ class CentauriClient:
             self._restart_event.clear()
 
     async def _session(self, host: str) -> None:
-        """One connection: open, subscribe, read until close or restart."""
+        """One connection: open, subscribe, read until close or restart.
+
+        Bootstrap order matters. The Centauri Carbon does NOT reliably push
+        Attributes / Status spontaneously to a freshly-connected client when
+        the printer is idle. Without those pushes we never learn the
+        mainboard ID, never subscribe, and never see job transitions.
+
+        So on connect we:
+          1. Resolve the mainboard ID. If unknown, run a brief UDP
+             discovery against the configured host to learn it.
+          2. Send Cmd 1 GET_PRINTER_ATTRIBUTES to confirm the printer
+             accepts us as a client and to refresh our cached attributes.
+          3. Send Cmd 512 SUBSCRIBE to start receiving status pushes.
+        """
         url = f"ws://{host}:{WS_PORT}{WS_PATH}"
         log.info("centauri: connecting to %s", url)
         async with await asyncio.wait_for(
@@ -251,8 +264,70 @@ class CentauriClient:
                 last_connected_at=now,
             )
 
-            # Subscribe lazily — we need the mainboard_id first.
-            subscribed = False
+            # 1. Make sure we have the mainboard ID. Use unicast UDP probe
+            # against the configured host — broadcast is unreliable on
+            # WiFi networks. Falls back to broadcast if unicast doesn't
+            # answer (some firmware revs ignore unicast).
+            if not self._mainboard_id:
+                try:
+                    from .discovery import discover as udp_discover
+                    from .discovery import probe_one
+
+                    p = await probe_one(host, timeout=2.0)
+                    if p is None or not p.mainboard_id:
+                        # fall back to broadcast
+                        found = await udp_discover(timeout=2.5)
+                        p = next(
+                            (f for f in found if f.host == host and f.mainboard_id),
+                            None,
+                        )
+                    if p and p.mainboard_id:
+                        self._mainboard_id = p.mainboard_id
+                        self._snapshot.mainboard_id = p.mainboard_id
+                        log.info(
+                            "centauri: learned mainboard %s via UDP probe",
+                            self._mainboard_id,
+                        )
+                    else:
+                        log.warning(
+                            "centauri: no mainboard ID from UDP probe — "
+                            "subscribe will wait for spontaneous Attributes push"
+                        )
+                except Exception:  # noqa: BLE001
+                    log.exception("centauri: UDP probe on connect failed")
+
+            # 2 + 3 + 4. Bootstrap the conversation. Cmd 1 (Attributes)
+            # confirms the printer accepts us as a client; Cmd 0
+            # (GET_PRINTER_STATUS) forces an immediate Status push
+            # regardless of state changes; Cmd 512 SUBSCRIBE asks for
+            # periodic Status pushes thereafter. Idle printers tend to
+            # ignore SUBSCRIBE silently — the explicit Cmd 0 is what
+            # actually gets us a first Status frame, after which the
+            # subscribe cadence takes over for transitions.
+            if self._mainboard_id:
+                try:
+                    attrs_pkt = sdcp.build_request(
+                        sdcp.Cmd.GET_PRINTER_ATTRIBUTES, None, self._mainboard_id
+                    )
+                    await ws.send(sdcp.encode(attrs_pkt))
+                    status_pkt = sdcp.build_request(
+                        sdcp.Cmd.GET_PRINTER_STATUS, None, self._mainboard_id
+                    )
+                    await ws.send(sdcp.encode(status_pkt))
+                    sub_pkt = sdcp.build_subscribe(
+                        self._mainboard_id, period_ms=DEFAULT_PUSH_PERIOD_MS
+                    )
+                    await ws.send(sdcp.encode(sub_pkt))
+                    log.info(
+                        "centauri: sent attrs + status + subscribe (mb=%s)",
+                        self._mainboard_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("centauri: failed to send bootstrap packets")
+
+            # Read loop. Late-arriving Attributes pushes can still teach
+            # us the mainboard ID, in which case we re-send the subscribe.
+            subscribed = self._mainboard_id is not None
             restart_task = asyncio.create_task(self._restart_event.wait())
             try:
                 while not self._stop_requested:
@@ -288,6 +363,20 @@ class CentauriClient:
 
     def _handle_frame(self, raw: Any) -> None:
         msg = sdcp.parse_message(raw)
+        # Verbose RX log so wire-level issues are diagnosable without
+        # tcpdump. Demote to DEBUG once the protocol is stable.
+        if isinstance(raw, (bytes, bytearray)):
+            preview = raw[:200].decode("utf-8", "replace")
+        else:
+            preview = str(raw)[:200]
+        log.info(
+            "centauri rx: type=%s mb=%s rid=%s topic=%r",
+            msg.type.name,
+            msg.mainboard_id,
+            msg.request_id,
+            msg.raw.get("Topic"),
+        )
+        log.debug("centauri rx body: %s", preview)
 
         if msg.mainboard_id and not self._mainboard_id:
             self._mainboard_id = msg.mainboard_id

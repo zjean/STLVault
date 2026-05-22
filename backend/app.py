@@ -4,6 +4,16 @@ import time
 import shutil
 import sqlite3
 import base64
+import logging
+
+# App-level loggers (custom_*) need explicit handler config — uvicorn only
+# wires up its own loggers by default. Setting root to INFO lets centauri/
+# spoolman/auth modules surface state transitions to stdout where they're
+# useful for live debugging.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 from fastapi import (
     FastAPI,
     UploadFile,
