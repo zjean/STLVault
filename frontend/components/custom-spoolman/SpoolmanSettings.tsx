@@ -91,10 +91,11 @@ const SpoolmanSettings: React.FC = () => {
       if (r.ok) {
         setTestState({ kind: "ok", version: r.version ?? "(unknown)" });
       } else {
-        setTestState({
-          kind: "fail",
-          message: r.error ?? "Connection failed",
-        });
+        // Prepend HTTP status when present — "401: Unauthorized" tells the
+        // user this is an auth problem, not a network one.
+        const msg = r.error ?? "Connection failed";
+        const prefix = r.status && r.status > 0 ? `${r.status}: ` : "";
+        setTestState({ kind: "fail", message: prefix + msg });
       }
     } catch (e) {
       setTestState({

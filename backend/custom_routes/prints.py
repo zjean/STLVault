@@ -5,12 +5,18 @@ spool's `used_weight`. Sync semantics:
 
 - Print row is written first with `syncedToSpoolman=0`.
 - Spoolman `PUT /spool/{id}/use` is called per filament row.
-- On full success → flip the flag to 1, store `consumedAt`, return
-  the new remaining-weight echoed back from Spoolman.
-- On any failure → row stays, flag stays 0, the response includes
-  `syncError` so the UI can show a retry affordance. The print is
-  considered "logged locally" not "consumed."
-- The flag is the idempotency guard against double-consume on retry.
+- Each successful per-row call stamps `consumedAt` and commits BEFORE
+  the next row's call is attempted. On any failure mid-batch we
+  return early; succeeded rows stay marked so a retry skips them.
+- On full success → flip `syncedToSpoolman=1` and commit.
+- The print-row flag plus the per-filament `consumedAt` together form
+  the idempotency guard against double-consume on retry.
+
+Known narrow recovery hole: if the Python process is killed *between*
+the Spoolman 200 and the SQLite commit that stamps `consumedAt`, the
+row reverts and the next /resync re-deducts that one spool. Closing
+this hole would require Spoolman to expose an undo verb, which it
+does not — so we accept it and document it.
 
 Deleting a synced print does NOT reverse Spoolman consumption — the
 UI shows a warning + a link to the spool in Spoolman.
@@ -171,7 +177,7 @@ def _attempt_consume(
     filaments: List[Dict[str, Any]],
     client: SpoolmanClient,
 ) -> Dict[str, Any]:
-    """PUT /spool/{id}/use for each filament that has a usedWeightG.
+    """PUT /spool/{id}/use for each filament that hasn't been consumed yet.
 
     Returns:
         {
@@ -181,13 +187,28 @@ def _attempt_consume(
           "failedSpoolId": int | None
         }
 
-    Idempotency: the caller must guard with `syncedToSpoolman`.
-    On partial failure we mark whichever spools succeeded and leave
-    the print row unsynced — the user retries the whole thing.
+    Idempotency: callers MUST refuse to invoke this for a print whose
+    ``syncedToSpoolman`` flag is already 1. WITHIN a single call, this
+    function skips filament rows whose ``consumedAt`` is non-null —
+    that's the per-row idempotency guard against partial-success
+    retries (one of two filaments succeeded, the other failed; the
+    user retries and we must not re-deduct the first one).
+
+    Each successful call commits its ``consumedAt`` marker
+    immediately. Recovery model: if the Python process crashes after
+    Spoolman 200s but before ``conn.commit()`` lands, the row is
+    silently rolled back and the next /resync re-deducts that one
+    spool. We accept this narrow window — full transactional sync
+    would require Spoolman to expose an undo verb, which it does not.
     """
     updates: List[Dict[str, Any]] = []
     at = prints_repo.now_ms()
     for f in filaments:
+        if f.get("consumedAt") is not None:
+            # Already deducted in a prior partial-success pass.
+            # Surface as a no-op "update" so the UI sees a consistent
+            # shape, but don't hit Spoolman.
+            continue
         used_w = f.get("usedWeightG")
         used_l = f.get("usedLengthMm")
         if used_w is None and used_l is None:
@@ -199,15 +220,19 @@ def _attempt_consume(
                 f["spoolId"], use_weight=used_w, use_length=used_l
             )
         except SpoolmanError as e:
+            # Commit any per-row markers that landed before this failure
+            # so a /resync doesn't re-deduct succeeded rows.
+            conn.commit()
             return {
                 "synced": False,
                 "spoolUpdates": updates,
                 "error": e.message,
                 "failedSpoolId": f["spoolId"],
             }
-        prints_repo.mark_filament_consumed(
-            conn, print_id, f["spoolId"], at_ms=at
-        )
+        # Stamp consumedAt by row id, not (printId, spoolId), so the same
+        # spool used twice in one print is handled correctly.
+        prints_repo.mark_filament_consumed_by_id(conn, f["id"], at_ms=at)
+        conn.commit()
         updates.append(
             {
                 "spoolId": f["spoolId"],
@@ -373,7 +398,7 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
 
         # Update used* on each filament row if the body included it.
         for f in body.filaments:
-            prints_repo.update_filament_used(
+            prints_repo.update_filament_used_by_spool(
                 conn,
                 print_id,
                 spool_id=f.spoolId,
@@ -471,6 +496,8 @@ def list_all(
     sinceMs: Optional[int] = None,
     untilMs: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    if status is not None and status not in prints_repo.ALL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
     conn = _get_db()
     try:
         return prints_repo.list_prints(

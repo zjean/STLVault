@@ -24,6 +24,12 @@ from typing import Optional
 # on a 200MB gcode file.
 GCODE_HEADER_BYTES = 64 * 1024
 
+# Cap the inner .3mf config we'll decompress. Real `slice_info.config`
+# files are a few KB. 1 MB is generous; anything larger is either
+# corrupted or a decompression-bomb attempt and we'd rather truncate
+# than load it into memory.
+THREEMF_CONFIG_MAX_BYTES = 1 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class SliceMetadata:
@@ -135,7 +141,10 @@ def parse_3mf_bytes(blob: bytes) -> SliceMetadata:
         # estimates in a structured form across Bambu/Orca/Elegoo.
         if "Metadata/slice_info.config" in names:
             try:
-                cfg = zf.read("Metadata/slice_info.config")
+                # Use zf.open(...).read(N) (NOT zf.read(name) which is
+                # unbounded) to cap memory in case of a zip-bomb input.
+                with zf.open("Metadata/slice_info.config") as fh:
+                    cfg = fh.read(THREEMF_CONFIG_MAX_BYTES)
                 md = _parse_slice_info_config(cfg)
                 if not md.is_empty():
                     return md

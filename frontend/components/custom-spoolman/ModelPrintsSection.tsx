@@ -454,12 +454,31 @@ const DeleteConfirm: React.FC<{
 }> = ({ print, spoolmanBaseUrl, busy, onCancel, onConfirm }) => {
   const f = print.filaments[0];
   const consumed = f?.usedWeightG ?? null;
+  const cancelBtnRef = React.useRef<HTMLButtonElement>(null);
+
+  // a11y: Esc cancels; autofocus the safer (Cancel) button so an
+  // accidental Enter doesn't delete.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    const t = window.setTimeout(() => cancelBtnRef.current?.focus(), 50);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(t);
+    };
+  }, [busy, onCancel]);
+
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-[2px] p-4"
       onClick={onCancel}
     >
       <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-print-title"
         className="bg-surface border border-danger/30 rounded-xl shadow-drawer p-5 max-w-[420px] w-full"
         onClick={(e) => e.stopPropagation()}
       >
@@ -467,7 +486,9 @@ const DeleteConfirm: React.FC<{
           <div className="w-12 h-12 rounded-full bg-danger/15 grid place-items-center">
             <AlertTriangle size={22} className="text-danger" />
           </div>
-          <h3 className="font-semibold text-fg m-0">Delete this print?</h3>
+          <h3 id="delete-print-title" className="font-semibold text-fg m-0">
+            Delete this print?
+          </h3>
           {print.syncedToSpoolman && consumed != null ? (
             <p className="text-[13px] text-fg-2 m-0 leading-relaxed">
               Deleting this won't reverse the{" "}
@@ -494,6 +515,7 @@ const DeleteConfirm: React.FC<{
 
           <div className="flex items-center gap-2 w-full mt-1">
             <button
+              ref={cancelBtnRef}
               type="button"
               onClick={onCancel}
               disabled={busy}
