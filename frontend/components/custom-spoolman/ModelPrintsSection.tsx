@@ -329,13 +329,29 @@ const PrintRow: React.FC<{
   const displayDuration = print.actDurationMin ?? print.estDurationMin ?? null;
   const isUnsynced = print.status === "completed" && !print.syncedToSpoolman;
 
+  // "printing" status doesn't mean a printer is observably running —
+  // it means "user clicked Start and hasn't reported an outcome yet."
+  // After 24h that's almost certainly a forgotten one, so we flag it
+  // as stale rather than continuing to imply something live.
+  const startedMs = print.startedAt ?? print.createdAt;
+  const isStalePrinting =
+    print.status === "printing" &&
+    startedMs != null &&
+    Date.now() - startedMs > 24 * 60 * 60 * 1000;
+
   const statusLabel: { icon: React.ReactNode; text: string; tone: string } = (() => {
     if (print.status === "printing") {
-      return {
-        icon: <Loader2 size={12} className="animate-spin" />,
-        text: "Printing",
-        tone: "text-accent",
-      };
+      return isStalePrinting
+        ? {
+            icon: <AlertTriangle size={12} />,
+            text: "Started — awaiting outcome",
+            tone: "text-warning",
+          }
+        : {
+            icon: <Play size={12} />,
+            text: "Started",
+            tone: "text-accent",
+          };
     }
     if (print.status === "completed") {
       return isUnsynced
@@ -354,7 +370,7 @@ const PrintRow: React.FC<{
 
   const when =
     print.status === "printing"
-      ? `started ${formatDate(print.startedAt ?? print.createdAt)}`
+      ? `started ${formatDate(startedMs)}`
       : formatDate(print.completedAt ?? print.startedAt ?? print.createdAt);
 
   return (
@@ -452,9 +468,16 @@ const DeleteConfirm: React.FC<{
   onCancel: () => void;
   onConfirm: () => void;
 }> = ({ print, spoolmanBaseUrl, busy, onCancel, onConfirm }) => {
-  const f = print.filaments[0];
-  const consumed = f?.usedWeightG ?? null;
   const cancelBtnRef = React.useRef<HTMLButtonElement>(null);
+
+  // Every filament leg that actually got deducted (consumedAt is set)
+  // is something Spoolman won't reverse. Enumerate ALL of them — a
+  // multi-spool print otherwise hides legs from the user.
+  const consumedLegs = print.filaments.filter(
+    (f) => f.consumedAt != null && f.usedWeightG != null,
+  );
+  const stripApiSuffix = (u: string | null) =>
+    u ? u.replace(/\/api\/v1\/?$/, "") : "";
 
   // a11y: Esc cancels; autofocus the safer (Cancel) button so an
   // accidental Enter doesn't delete.
@@ -479,7 +502,7 @@ const DeleteConfirm: React.FC<{
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-print-title"
-        className="bg-surface border border-danger/30 rounded-xl shadow-drawer p-5 max-w-[420px] w-full"
+        className="bg-surface border border-danger/30 rounded-xl shadow-drawer p-5 max-w-[460px] w-full"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-col items-center text-center gap-3">
@@ -489,28 +512,50 @@ const DeleteConfirm: React.FC<{
           <h3 id="delete-print-title" className="font-semibold text-fg m-0">
             Delete this print?
           </h3>
-          {print.syncedToSpoolman && consumed != null ? (
-            <p className="text-[13px] text-fg-2 m-0 leading-relaxed">
-              Deleting this won't reverse the{" "}
-              <strong className="text-fg">{consumed}g</strong> deducted from spool{" "}
-              <strong className="text-fg">#{f?.spoolId}</strong> in Spoolman.
-              Adjust it manually over there if needed.
-            </p>
+          {consumedLegs.length > 0 ? (
+            <div className="w-full">
+              <p className="text-[13px] text-fg-2 m-0 leading-relaxed mb-2">
+                Deleting this won't reverse the deductions already made in
+                Spoolman. Adjust them manually over there if needed:
+              </p>
+              <ul className="flex flex-col gap-1 text-left">
+                {consumedLegs.map((leg) => (
+                  <li
+                    key={leg.id}
+                    className="flex items-center gap-2 px-2.5 py-1.5 bg-bg-3 border border-border-soft rounded-md text-[12.5px]"
+                  >
+                    {leg.filamentColor && (
+                      <span
+                        aria-hidden
+                        className="w-3 h-3 rounded-full border border-border-soft flex-shrink-0"
+                        style={{ backgroundColor: `#${leg.filamentColor}` }}
+                      />
+                    )}
+                    <span className="flex-1 min-w-0 truncate text-fg">
+                      {leg.spoolLabel ?? `Spool #${leg.spoolId}`}
+                    </span>
+                    <span className="font-mono text-fg-2 flex-shrink-0">
+                      {leg.usedWeightG}g
+                    </span>
+                    {spoolmanBaseUrl && (
+                      <a
+                        href={`${stripApiSuffix(spoolmanBaseUrl)}/spool/show/${leg.spoolId}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-accent hover:underline inline-flex items-center gap-0.5"
+                        title={`Open spool #${leg.spoolId} in Spoolman`}
+                      >
+                        <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <p className="text-[13px] text-fg-2 m-0">
               This print row will be removed from STLVault.
             </p>
-          )}
-
-          {spoolmanBaseUrl && f && print.syncedToSpoolman && (
-            <a
-              href={`${spoolmanBaseUrl.replace(/\/api\/v1\/?$/, "")}/spool/show/${f.spoolId}`}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-[12.5px] text-accent hover:underline inline-flex items-center gap-1"
-            >
-              Open spool in Spoolman <ExternalLink size={11} />
-            </a>
           )}
 
           <div className="flex items-center gap-2 w-full mt-1">

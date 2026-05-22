@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Loader2,
   Menu as MenuIcon,
+  Play,
   Printer,
   RefreshCw,
   Scale,
@@ -48,11 +49,15 @@ const ALL_STATUSES: PrintStatus[] = [
   "cancelled",
 ];
 
-const STATUS_TONES: Record<PrintStatus, { icon: React.ReactNode; tone: string }> = {
-  completed: { icon: <Check size={12} />, tone: "text-success" },
-  printing: { icon: <Loader2 size={12} className="animate-spin" />, tone: "text-accent" },
-  failed: { icon: <XCircle size={12} />, tone: "text-danger" },
-  cancelled: { icon: <CircleSlash size={12} />, tone: "text-fg-3" },
+// "printing" does NOT mean the printer is observably running — there's
+// no live connection to the printer. It means the user clicked Start
+// and hasn't reported an outcome yet. Static Play icon is honest;
+// stale-detection (>24h) is in HistoryRow.
+const STATUS_TONES: Record<PrintStatus, { icon: React.ReactNode; tone: string; text: string }> = {
+  completed: { icon: <Check size={12} />, tone: "text-success", text: "Completed" },
+  printing: { icon: <Play size={12} />, tone: "text-accent", text: "Started" },
+  failed: { icon: <XCircle size={12} />, tone: "text-danger", text: "Failed" },
+  cancelled: { icon: <CircleSlash size={12} />, tone: "text-fg-3", text: "Cancelled" },
 };
 
 const DATE_PRESETS = [
@@ -412,6 +417,16 @@ const HistoryRow: React.FC<{
   const isUnsynced = print.status === "completed" && !print.syncedToSpoolman;
   const tone = STATUS_TONES[print.status];
 
+  // A "Started" row that's older than 24h is almost certainly a
+  // forgotten one — the user clicked Start and never came back to
+  // mark the outcome. Flag it differently so the dashboard doesn't
+  // imply a live in-progress print.
+  const startedMs = print.startedAt ?? print.createdAt;
+  const isStalePrinting =
+    print.status === "printing" &&
+    startedMs != null &&
+    Date.now() - startedMs > 24 * 60 * 60 * 1000;
+
   const when =
     print.completedAt ?? print.startedAt ?? print.createdAt;
 
@@ -449,16 +464,20 @@ const HistoryRow: React.FC<{
         </div>
         <div className="flex items-center gap-2 text-[12px] min-w-0">
           <span
-            className={`inline-flex items-center gap-1 font-medium ${tone.tone}`}
+            className={`inline-flex items-center gap-1 font-medium ${
+              isStalePrinting ? "text-warning" : tone.tone
+            }`}
           >
-            {isUnsynced ? (
+            {isUnsynced || isStalePrinting ? (
               <AlertTriangle size={11} />
             ) : (
               tone.icon
             )}
             {isUnsynced
               ? "Logged, not synced"
-              : print.status[0].toUpperCase() + print.status.slice(1)}
+              : isStalePrinting
+                ? "Started — awaiting outcome"
+                : tone.text}
           </span>
           <span className="text-fg-3">•</span>
           <span className="text-fg-3">{formatDateTime(when)}</span>

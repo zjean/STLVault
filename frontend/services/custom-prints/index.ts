@@ -68,6 +68,9 @@ export interface CompletePrintInput {
   status?: PrintStatus;
   filaments?: {
     spoolId: number;
+    // Send the filament row id from the existing print when known —
+    // disambiguates same-spool-twice legs and survives multi-spool UI.
+    filamentRowId?: string;
     usedWeightG?: number | null;
     usedLengthMm?: number | null;
   }[];

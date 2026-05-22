@@ -104,6 +104,11 @@ class FilamentIn(BaseModel):
     usedWeightG: Optional[float] = None
     estLengthMm: Optional[float] = None
     usedLengthMm: Optional[float] = None
+    # Optional row id from a prior /api/prints/{id} read. When present,
+    # the complete-print path updates THIS specific filament leg,
+    # disambiguating same-spool-twice prints. When absent, falls back
+    # to (printId, spoolId) match — fine for the single-filament UI.
+    filamentRowId: Optional[str] = None
 
 
 class CreatePrintBody(BaseModel):
@@ -451,14 +456,25 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
             )
 
         # Update used* on each filament row if the body included it.
+        # Prefer row-id keying when the client supplied it — that's the
+        # canonical address. Fall back to (printId, spoolId) for clients
+        # that only know the spool number (single-filament UI today).
         for f in body.filaments:
-            prints_repo.update_filament_used_by_spool(
-                conn,
-                print_id,
-                spool_id=f.spoolId,
-                used_weight_g=f.usedWeightG,
-                used_length_mm=f.usedLengthMm,
-            )
+            if f.filamentRowId is not None:
+                prints_repo.update_filament_used_by_id(
+                    conn,
+                    filament_row_id=f.filamentRowId,
+                    used_weight_g=f.usedWeightG,
+                    used_length_mm=f.usedLengthMm,
+                )
+            else:
+                prints_repo.update_filament_used_by_spool(
+                    conn,
+                    print_id,
+                    spool_id=f.spoolId,
+                    used_weight_g=f.usedWeightG,
+                    used_length_mm=f.usedLengthMm,
+                )
 
         # Update the parent row's status + timestamps.
         prints_repo.update_print_fields(
@@ -521,6 +537,12 @@ def resync_one(print_id: str) -> Dict[str, Any]:
     """Retry the Spoolman consume call for a print that's logged but
     not synced. Same idempotency guard: refuses to re-consume an
     already-synced print.
+
+    Also backfills snapshot fields (spoolLabel / filamentColor) for any
+    filament leg whose snapshot was left null at create time —
+    typically because Spoolman was unreachable when the row was first
+    inserted. Without this, those rows would stay readable only by
+    `Spool #N` forever and the snapshot would have served no purpose.
     """
     client = _require_client()
     conn = _get_db()
@@ -537,10 +559,42 @@ def resync_one(print_id: str) -> Dict[str, Any]:
                 status_code=400,
                 detail="No filament usage recorded on this print; nothing to consume.",
             )
+
+        # Backfill snapshots first. Best-effort: a Spoolman get_spool
+        # failure here doesn't block the consume call below — that's
+        # what /resync is fundamentally for. We just won't backfill on
+        # this attempt; the next resync will try again.
+        for f in existing["filaments"]:
+            if f.get("spoolLabel") and f.get("filamentColor"):
+                continue
+            try:
+                spool = client.get_spool(f["spoolId"])
+            except SpoolmanError as e:
+                log.warning(
+                    "prints: snapshot backfill failed for spool #%s: %s",
+                    f["spoolId"],
+                    e.message,
+                )
+                continue
+            fil = (spool or {}).get("filament") or {}
+            vendor = fil.get("vendor") or {}
+            parts = [vendor.get("name"), fil.get("name")]
+            label = " ".join(p for p in parts if p) or None
+            prints_repo.backfill_filament_snapshot(
+                conn,
+                filament_row_id=f["id"],
+                spool_label=label,
+                filament_color=fil.get("color_hex"),
+            )
+        conn.commit()
+
+        # Re-read after snapshot backfill so _attempt_consume + the
+        # returned shape carry the freshly-stored label/color.
+        refreshed = prints_repo.get_print(conn, print_id)
         sync_result = _attempt_consume(
             conn,
             print_id=print_id,
-            filaments=existing["filaments"],
+            filaments=refreshed["filaments"],
             client=client,
         )
         if sync_result["synced"]:
