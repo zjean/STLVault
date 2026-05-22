@@ -204,6 +204,52 @@ async def discover_printers() -> list[dict[str, Any]]:
 
 
 # --- /events ----------------------------------------------------------------
+#
+# Route ordering matters here: FastAPI resolves in declaration order, so
+# the literal `/events/stream` MUST be declared before the parameterised
+# `/events/{event_id}` — otherwise "stream" gets matched as a (non-int)
+# event_id and the framework returns 422 before our handler runs.
+
+
+@router.get("/events/stream")
+async def events_stream() -> StreamingResponse:
+    """Server-Sent Events stream for inbox badge + status changes.
+
+    Emits JSON-encoded payloads:
+      {"type":"event.new","eventId":...}
+      {"type":"event.reviewed","eventId":...,"action":"confirm"|"dismiss"}
+      {"type":"status","connected":...}
+      {"type":"settings.changed"}
+      {"type":"inbox.count","count":N}
+    """
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
+    _subscribers.append(queue)
+
+    async def stream():
+        try:
+            initial = {"type": "inbox.count", "count": repo.count_unreviewed(_db)}
+            yield f"data: {json.dumps(initial)}\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            try:
+                _subscribers.remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/events")
@@ -300,46 +346,5 @@ def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
     return review
 
 
-# --- /events/stream (SSE) ---------------------------------------------------
-
-
-@router.get("/events/stream")
-async def events_stream() -> StreamingResponse:
-    """Server-Sent Events stream for inbox badge + status changes.
-
-    Emits JSON-encoded payloads:
-      {"type":"event.new","eventId":...}
-      {"type":"event.reviewed","eventId":...,"action":"confirm"|"dismiss"}
-      {"type":"status","connected":...}
-      {"type":"settings.changed"}
-    """
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
-    _subscribers.append(queue)
-
-    async def stream():
-        try:
-            # initial state push so the badge appears immediately
-            initial = {"type": "inbox.count", "count": repo.count_unreviewed(_db)}
-            yield f"data: {json.dumps(initial)}\n\n"
-            while True:
-                try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
-                    yield f"data: {json.dumps(msg)}\n\n"
-                except asyncio.TimeoutError:
-                    # keepalive — comments are ignored by EventSource clients
-                    yield ": keepalive\n\n"
-        finally:
-            try:
-                _subscribers.remove(queue)
-            except ValueError:
-                pass
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable proxy buffering
-        },
-    )
+# (SSE handler lives at the top of the /events block — must be declared
+# before the parameterised /events/{event_id} so the literal route wins.)
