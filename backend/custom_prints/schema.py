@@ -51,6 +51,21 @@ def ensure_prints_tables(conn: sqlite3.Connection) -> None:
         cur.execute(
             "ALTER TABLE custom_prints RENAME COLUMN actDurationMin TO wallClockMin"
         )
+
+    # Centauri-integration additions. Forward-only, idempotent. The
+    # Centauri code adds these columns here (not in custom_centauri/) so
+    # that all custom_prints schema lives in one place.
+    #   - `source` distinguishes manual ("Log a print" dialog) from
+    #     centauri ("printed-from-Centauri" auto-detected events).
+    #   - `centauriEventId` is a soft FK to centauri_print_event.id,
+    #     letting us drill from a print log entry back to the raw
+    #     printer event and vice versa.
+    if "source" not in cols:
+        cur.execute(
+            "ALTER TABLE custom_prints ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
+        )
+    if "centauriEventId" not in cols:
+        cur.execute("ALTER TABLE custom_prints ADD COLUMN centauriEventId INTEGER")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS custom_print_filaments (

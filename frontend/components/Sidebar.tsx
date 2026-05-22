@@ -12,8 +12,10 @@ import {
   Clock,
   Tag,
   Printer,
+  Inbox,
 } from "lucide-react";
 import { Folder, STLModel, StorageStats } from "../types";
+import { resolveApiBase } from "../services/apiBase";
 
 const APP_TAG = import.meta.env.VITE_APP_TAG || "dev";
 
@@ -52,6 +54,52 @@ const Sidebar: React.FC<SidebarProps> = ({
   const onRecentRoute = location.pathname === "/recent";
   const onTagsRoute = location.pathname.startsWith("/tags");
   const onPrintsRoute = location.pathname === "/prints";
+  const onInboxRoute = location.pathname === "/inbox";
+
+  // Centauri inbox unread count. SSE pushes when new events arrive or
+  // existing events are reviewed; we re-fetch the count then.
+  const [inboxCount, setInboxCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const apiBase = resolveApiBase;
+    const refresh = async () => {
+      try {
+        const r = await fetch(`${apiBase()}/centauri/events?reviewed=false&limit=1`);
+        if (!r.ok || cancelled) return;
+        // count comes via SSE 'inbox.count' push; for the simple
+        // fallback we just check whether anything is returned and
+        // hit a count via a separate cheap query.
+        const all = await fetch(`${apiBase()}/centauri/events?reviewed=false&limit=500`);
+        const arr = (await all.json()) as unknown[];
+        if (!cancelled && Array.isArray(arr)) setInboxCount(arr.length);
+      } catch {
+        // Centauri integration may not be reachable; treat as zero.
+      }
+    };
+    void refresh();
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(`${apiBase()}/centauri/events/stream`);
+      es.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data) as { type: string; count?: number };
+          if (msg.type === "inbox.count" && typeof msg.count === "number") {
+            if (!cancelled) setInboxCount(msg.count);
+          } else if (msg.type === "event.new" || msg.type === "event.reviewed") {
+            void refresh();
+          }
+        } catch {
+          // keepalive comments don't parse as JSON
+        }
+      };
+    } catch {
+      // EventSource unavailable; fall back to the initial fetch
+    }
+    return () => {
+      cancelled = true;
+      if (es) es.close();
+    };
+  }, []);
 
   const todayCount = useMemo(() => {
     const today0 = new Date();
@@ -477,6 +525,25 @@ const Sidebar: React.FC<SidebarProps> = ({
               }`}
             >
               {tagCount}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          className={navItemClass(onInboxRoute)}
+          onClick={() => navigate("/inbox")}
+        >
+          <Inbox size={16} />
+          <span className="flex-1 text-left">Inbox</span>
+          {inboxCount > 0 && (
+            <span
+              className={`ml-auto font-mono text-[11px] px-1.5 py-px rounded min-w-[22px] text-center ${
+                onInboxRoute
+                  ? "bg-accent/15 text-accent"
+                  : "bg-bg-3 text-fg-3"
+              }`}
+            >
+              {inboxCount}
             </span>
           )}
         </button>

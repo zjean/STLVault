@@ -20,6 +20,7 @@ import {
 } from "./services/custom-importers";
 import MakerworldLikedModal from "./components/custom-importers/MakerworldLikedModal";
 import PrintsHistoryView from "./components/custom-spoolman/PrintsHistoryView";
+import InboxView from "./components/custom-centauri/InboxView";
 import {
   FolderInput,
   Tags,
@@ -67,6 +68,7 @@ const App = () => {
   const showRecent = location.pathname === "/recent";
   const showTags = location.pathname === "/tags";
   const showPrints = location.pathname === "/prints";
+  const showInbox = location.pathname === "/inbox";
   const tagDetailMatch = location.pathname.match(/^\/tags\/(.+)$/);
   const showTagDetail = !!tagDetailMatch;
   const currentTagName = tagDetailMatch
@@ -800,6 +802,14 @@ const App = () => {
               setSelectedModelId(m.id);
               navigate("/");
             }}
+          />
+        ) : showInbox ? (
+          <InboxView
+            models={models}
+            onBack={closeSettings}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
           />
         ) : showTagDetail && currentTagName ? (
           <TagDetailView

@@ -21,15 +21,18 @@ from pydantic import BaseModel
 
 from importers import printables
 
-# fork-only: makerworld importer + bambu cloud auth + spoolman integration
+# fork-only: makerworld importer + bambu cloud auth + spoolman integration + centauri printer
 from custom_auth.schema import ensure_bambu_credentials_table
 from custom_spoolman.schema import ensure_spoolman_settings_table
 from custom_prints.schema import ensure_prints_tables
+from custom_centauri.schema import ensure_centauri_tables
+from custom_centauri.client import CentauriClient
 from custom_routes import (
     bambu_auth as mw_auth_routes,
     makerworld as mw_routes,
     spoolman as spoolman_routes,
     prints as prints_routes,
+    centauri as centauri_routes,
 )
 
 DB_PATH = os.getenv("DB_PATH", "data.db")
@@ -110,12 +113,13 @@ def init_db():
 init_db()
 
 
-# fork-only: makerworld + bambu auth + spoolman wire-up
+# fork-only: makerworld + bambu auth + spoolman + centauri wire-up
 _mw_conn = get_db_conn()
 try:
     ensure_bambu_credentials_table(_mw_conn)
     ensure_spoolman_settings_table(_mw_conn)
     ensure_prints_tables(_mw_conn)
+    ensure_centauri_tables(_mw_conn)
 finally:
     _mw_conn.close()
 mw_auth_routes.set_db_conn_factory(get_db_conn)
@@ -123,10 +127,33 @@ mw_routes.configure(db_conn_factory=get_db_conn, upload_dir=UPLOAD_DIR)
 spoolman_routes.set_db_conn_factory(get_db_conn)
 spoolman_routes.set_upload_dir(UPLOAD_DIR)
 prints_routes.set_db_conn_factory(get_db_conn)
+
+# Centauri client is a singleton owned by the app. Created here so the
+# ingestion callback can write into the SQLite + publish on the SSE bus
+# before the WS task starts at startup.
+_centauri_ingest = centauri_routes.make_ingest_callback()
+_centauri_client = CentauriClient(_centauri_ingest)
+centauri_routes.configure(db_conn_factory=get_db_conn, client=_centauri_client)
+
 app.include_router(mw_auth_routes.router)
 app.include_router(mw_routes.router)
 app.include_router(spoolman_routes.router)
 app.include_router(prints_routes.router)
+app.include_router(centauri_routes.router)
+
+
+@app.on_event("startup")
+async def _start_centauri_client() -> None:
+    # Boot the WS connection with the persisted IP (if any). The client
+    # will sit idle if no IP is configured and reconnect on settings PUT.
+    from custom_centauri import repo as centauri_repo
+    settings = centauri_repo.get_settings(get_db_conn)
+    await _centauri_client.start(settings.get("printerIp"))
+
+
+@app.on_event("shutdown")
+async def _stop_centauri_client() -> None:
+    await _centauri_client.stop()
 
 
 def now_ms() -> int:

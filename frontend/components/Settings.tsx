@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Menu as MenuIcon, ChevronLeft, Check, Moon, Sun } from "lucide-react";
 import CloudSettings from "./custom-bambu/CloudSettings";
 import SpoolmanSettings from "./custom-spoolman/SpoolmanSettings";
+import CentauriSettings from "./custom-centauri/CentauriSettings";
 
 type ThemeMode = "dark" | "light";
 
@@ -274,6 +275,21 @@ const Settings: React.FC<SettingsProps> = ({
             </p>
             <div className="rounded-[10px] border border-border-soft bg-surface p-4">
               <CloudSettings />
+            </div>
+          </section>
+
+          {/* === Centauri Carbon (fork addition) === */}
+          <section className="mb-9">
+            <h3 className="m-0 mb-1 text-[15px] font-semibold -tracking-[0.005em] text-fg">
+              Centauri Carbon
+            </h3>
+            <p className="m-0 mb-4 text-[13px] text-fg-3">
+              Auto-log finished prints from an Elegoo Centauri Carbon over the
+              LAN. STLVault opens a persistent WebSocket to the printer and
+              files completed jobs into the Print Inbox for review.
+            </p>
+            <div className="rounded-[10px] border border-border-soft bg-surface p-4">
+              <CentauriSettings />
             </div>
           </section>
 
