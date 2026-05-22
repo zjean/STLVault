@@ -1,8 +1,19 @@
 """STLVault-native print log routes.
 
-Calls Spoolman at completion time to deduct used filament from the
-spool's `used_weight`. Sync semantics:
+Calls Spoolman to deduct used filament from the spool's `used_weight`.
 
+What triggers a deduction:
+- ANY print whose body carries `usedWeightG` or `usedLengthMm` on at
+  least one filament leg — regardless of status. A failed print at
+  60% that ate 28g of filament still left 28g off the spool; the
+  status describes the OUTCOME (was the object usable?), not whether
+  material was consumed.
+- A `completed` print with NO recorded consumption is rejected (400).
+  The user asserted the object came off the bed without telling us
+  the weight — that's a slip, not a valid record. Use 'cancelled'
+  for prints that didn't consume material.
+
+Sync semantics:
 - Print row is written first with `syncedToSpoolman=0`.
 - Spoolman `PUT /spool/{id}/use` is called per filament row.
 - Each successful per-row call stamps `consumedAt` and commits BEFORE
@@ -247,11 +258,23 @@ def _attempt_consume(
     }
 
 
-def _has_any_used(filaments: List[Dict[str, Any]]) -> bool:
-    return any(
-        (f.get("usedWeightG") is not None or f.get("usedLengthMm") is not None)
-        for f in filaments
-    )
+def _has_any_used(filaments) -> bool:
+    """True if any leg has a non-null used weight or used length.
+
+    Accepts either dicts (post-hydration, post-DB-read) or pydantic
+    ``FilamentIn`` objects (raw request bodies) — handles both shapes
+    so the call site can validate before paying the hydration cost.
+    """
+    def used_of(f):
+        if hasattr(f, "usedWeightG"):
+            return f.usedWeightG, f.usedLengthMm
+        return f.get("usedWeightG"), f.get("usedLengthMm")
+
+    for f in filaments:
+        w, l = used_of(f)
+        if w is not None or l is not None:
+            return True
+    return False
 
 
 # --- routes ---
@@ -270,6 +293,24 @@ def list_for_model(model_id: str) -> List[Dict[str, Any]]:
 def create_for_model(model_id: str, body: CreatePrintBody) -> Dict[str, Any]:
     if body.status not in prints_repo.ALL_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {body.status}")
+
+    needs_consume = _has_any_used(body.filaments)
+
+    # A completed print without recorded consumption is malformed: the user
+    # asserted the print produced an object but didn't tell us how much
+    # filament it took. Don't silently swallow this and mark the row as
+    # synced; force the user to either provide a weight or pick a different
+    # status (failed/cancelled) that doesn't carry the "material was
+    # consumed" implication.
+    if body.status == prints_repo.STATUS_COMPLETED and not needs_consume:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A completed print must record actual material consumption "
+                "(usedWeightG or usedLengthMm) on at least one filament. "
+                "For prints that consumed nothing, use status 'cancelled'."
+            ),
+        )
 
     client = _client_or_none()
     filaments_hydrated = _hydrate_filament_snapshots(body.filaments, client)
@@ -297,19 +338,26 @@ def create_for_model(model_id: str, body: CreatePrintBody) -> Dict[str, Any]:
             "spoolUpdates": [],
             "error": None,
         }
-        if (
-            body.status == prints_repo.STATUS_COMPLETED
-            and _has_any_used(filaments_hydrated)
-        ):
+        # Consumption is driven by `usedWeightG`/`usedLengthMm`, NOT by
+        # status — a failed print that ate 28g of filament still left 28g
+        # off the spool, so Spoolman needs to know. Status describes
+        # outcome (object usable / not / stopped), which is orthogonal to
+        # whether material was consumed.
+        if needs_consume:
             if client is None:
                 sync_result["error"] = (
                     "Spoolman not configured — print logged locally only."
                 )
             else:
+                # Re-read so _attempt_consume sees the persisted filament
+                # rows including their generated ids (the request-body
+                # shape doesn't carry ids; mark_filament_consumed_by_id
+                # needs them).
+                persisted = prints_repo.get_print(conn, print_id)
                 sync_result = _attempt_consume(
                     conn,
                     print_id=print_id,
-                    filaments=filaments_hydrated,
+                    filaments=persisted["filaments"],
                     client=client,
                 )
                 if sync_result["synced"]:
@@ -376,9 +424,15 @@ def delete_one(print_id: str) -> Dict[str, Any]:
 
 @router.post("/api/prints/{print_id}/complete")
 def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
-    """Transition a 'printing' row to 'completed' (or failed/cancelled),
-    optionally updating used weight/length, and run the Spoolman consume
-    call for completed status.
+    """Transition a 'printing' row to a terminal status (completed /
+    failed / cancelled), optionally updating used weight/length per
+    filament, and run the Spoolman consume call for any filament that
+    actually consumed material.
+
+    Consumption is driven by `usedWeightG`/`usedLengthMm` — a failed
+    print at 60% can have eaten 28g of filament; that material left
+    the spool and Spoolman needs to know. Status describes whether
+    the printed object was usable, which is independent.
     """
     if body.status not in prints_repo.ALL_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {body.status}")
@@ -419,15 +473,29 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
 
         # Re-read so we have the post-update filament rows for the consume call.
         updated = prints_repo.get_print(conn, print_id)
+        needs_consume = _has_any_used(updated["filaments"])
+
+        # A completed print without any recorded consumption is malformed:
+        # the user said "the object came off the bed" but didn't tell us
+        # how much filament it took. Reject rather than silently mark
+        # synced. (The terminal row state remains whatever the update set
+        # it to — we just refuse to advance the sync state from this body.)
+        if body.status == prints_repo.STATUS_COMPLETED and not needs_consume:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A completed print must record actual material consumption "
+                    "(usedWeightG or usedLengthMm) on at least one filament. "
+                    "For prints that consumed nothing, use status 'cancelled'."
+                ),
+            )
+
         sync_result: Dict[str, Any] = {
             "synced": False,
             "spoolUpdates": [],
             "error": None,
         }
-        if (
-            body.status == prints_repo.STATUS_COMPLETED
-            and _has_any_used(updated["filaments"])
-        ):
+        if needs_consume:
             if client is None:
                 sync_result["error"] = (
                     "Spoolman not configured — print completed locally only."

@@ -311,8 +311,11 @@ const LogPrintDialog: React.FC<Props> = ({
           filaments: [
             {
               spoolId: form.spoolId,
-              usedWeightG: form.status === "completed" ? usedW : null,
-              usedLengthMm: form.status === "completed" ? usedL : null,
+              // Send used* for any terminal status — a failed print that
+              // ate 28g still left 28g off the spool, and the user may
+              // have weighed it. Status is outcome, not consumption.
+              usedWeightG: usedW,
+              usedLengthMm: usedL,
             },
           ],
           completedAt: Date.now(),
@@ -334,16 +337,17 @@ const LogPrintDialog: React.FC<Props> = ({
           notes,
         });
       } else {
-        // mode === "log"
+        // mode === "log" — status may be completed/failed/cancelled.
+        // Send used* regardless; backend deducts whatever's present.
         result = await printsApi.createForModel(model.id, {
           status: form.status,
           filaments: [
             {
               spoolId: form.spoolId,
               estWeightG: estW,
-              usedWeightG: form.status === "completed" ? usedW : null,
+              usedWeightG: usedW,
               estLengthMm: estL,
-              usedLengthMm: form.status === "completed" ? usedL : null,
+              usedLengthMm: usedL,
             },
           ],
           estDurationMin: estDur,
@@ -558,9 +562,16 @@ const LogPrintDialog: React.FC<Props> = ({
                   </button>
                 ))}
               </div>
-              {form.status !== "completed" && mode !== "complete" && (
+              {form.status === "completed" && (
                 <p className="text-[11.5px] text-fg-3">
-                  No spool will be deducted for {form.status} prints.
+                  Completed prints require a used weight — leave the field
+                  blank only if you mean cancelled.
+                </p>
+              )}
+              {form.status !== "completed" && (
+                <p className="text-[11.5px] text-fg-3">
+                  Set used weight to whatever actually came off the spool
+                  (failed prints often did consume material).
                 </p>
               )}
             </div>
@@ -663,7 +674,22 @@ const LogPrintDialog: React.FC<Props> = ({
           </button>
           <button
             type="submit"
-            disabled={submitting || form.spoolId == null}
+            disabled={(() => {
+              if (submitting) return true;
+              if (form.spoolId == null) return true;
+              // A completed print MUST record actual consumption — the
+              // backend will reject otherwise, but block in the UI so the
+              // user gets immediate feedback rather than a server 400.
+              // Start mode (no terminal status yet) doesn't need this.
+              const isTerminalCompleted =
+                mode !== "start" && form.status === "completed";
+              if (isTerminalCompleted) {
+                const usedW = numOrNull(form.usedWeightG);
+                const usedL = numOrNull(form.usedLengthMm);
+                if (usedW == null && usedL == null) return true;
+              }
+              return false;
+            })()}
             onClick={handleSubmit}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-accent text-accent-fg text-[13px] font-semibold hover:brightness-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
