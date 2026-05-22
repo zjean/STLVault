@@ -121,6 +121,13 @@ const LogPrintDialog: React.FC<Props> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  // useState is asynchronous, so two click handlers firing in the same
+  // event loop can both see submitting=false. The ref reads + writes
+  // synchronously and guards the *real* race the user can trigger
+  // (Enter + click, double-click on a slow network).
+  const submitLockRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const firstFieldRef = useRef<HTMLSelectElement>(null);
 
   // Apply slicer parse results to empty form fields (don't clobber user input).
   const applyParse = (md: SliceParseResult, source: string) => {
@@ -248,8 +255,9 @@ const LogPrintDialog: React.FC<Props> = ({
     setParsing(true);
     try {
       const md = await spoolmanApi.parseSliceUpload(file);
-      if (!md.empty) applyParse(md, file.name);
-      else applyParse(md, file.name); // still show source so user sees it tried
+      // applyParse is safe whether md.empty or not — when empty it just
+      // updates the source label and leaves form fields untouched.
+      applyParse(md, file.name);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to parse file");
     } finally {
@@ -277,11 +285,13 @@ const LogPrintDialog: React.FC<Props> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitting) return;
+    // Synchronous ref read — wins races that submitting-state can't.
+    if (submitLockRef.current) return;
     if (form.spoolId == null) {
       setSubmitError("Pick a spool first.");
       return;
     }
+    submitLockRef.current = true;
     setSubmitting(true);
     setSubmitError(null);
 
@@ -347,8 +357,24 @@ const LogPrintDialog: React.FC<Props> = ({
       setSubmitError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSubmitting(false);
+      submitLockRef.current = false;
     }
   };
+
+  // a11y: Esc closes the dialog; autofocus first interactive field on open.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitLockRef.current) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    // Defer focus a tick so the select has its options populated.
+    const t = window.setTimeout(() => firstFieldRef.current?.focus(), 50);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.clearTimeout(t);
+    };
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -368,11 +394,18 @@ const LogPrintDialog: React.FC<Props> = ({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="log-print-dialog-title"
         className="bg-bg-2 border border-border rounded-xl shadow-drawer w-full max-w-[560px] max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 flex items-center gap-3 border-b border-border-soft">
-          <h2 className="m-0 text-[15px] font-semibold text-fg flex-1 truncate">
+          <h2
+            id="log-print-dialog-title"
+            className="m-0 text-[15px] font-semibold text-fg flex-1 truncate"
+          >
             {title}: <span className="font-normal text-fg-2">{model.name}</span>
           </h2>
           <button
@@ -416,6 +449,7 @@ const LogPrintDialog: React.FC<Props> = ({
             )}
 
             <select
+              ref={firstFieldRef}
               id="spool-select"
               value={form.spoolId ?? ""}
               onChange={(e) =>

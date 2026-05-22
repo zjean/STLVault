@@ -272,7 +272,7 @@ def update_print_fields(
     return cur.rowcount > 0
 
 
-def update_filament_used(
+def update_filament_used_by_spool(
     conn: sqlite3.Connection,
     print_id: str,
     *,
@@ -280,30 +280,43 @@ def update_filament_used(
     used_weight_g: Optional[float],
     used_length_mm: Optional[float],
 ) -> None:
-    """Set the `used*` columns on the filament row matching (printId, spoolId).
+    """Set used* on the first filament row matching (printId, spoolId).
 
-    Used at completion time when the user confirms the actual consumed
-    amount (which may differ from the slicer estimate).
+    Used by the complete-print path where the client supplies updates
+    keyed by spool. Today the dialog always sends a single filament row,
+    so (printId, spoolId) is unique. The repo guards against future
+    same-spool-twice prints by limiting the UPDATE to one row via
+    ``LIMIT 1`` ordered by id.
     """
     cur = conn.cursor()
     cur.execute(
         """
         UPDATE custom_print_filaments
         SET usedWeightG = ?, usedLengthMm = ?
-        WHERE printId = ? AND spoolId = ?
+        WHERE id = (
+            SELECT id FROM custom_print_filaments
+            WHERE printId = ? AND spoolId = ?
+            ORDER BY id ASC LIMIT 1
+        )
         """,
         (used_weight_g, used_length_mm, print_id, spool_id),
     )
 
 
-def mark_filament_consumed(
-    conn: sqlite3.Connection, print_id: str, spool_id: int, *, at_ms: int
+def mark_filament_consumed_by_id(
+    conn: sqlite3.Connection, filament_row_id: str, *, at_ms: int
 ) -> None:
+    """Stamp ``consumedAt`` on a specific filament row.
+
+    Identifying by row id (rather than (printId, spoolId)) makes the
+    consume marker honest in the multi-spool / same-spool-twice case
+    and lets :func:`_attempt_consume` skip already-consumed rows on
+    retry. See :func:`custom_routes.prints._attempt_consume`.
+    """
     cur = conn.cursor()
     cur.execute(
-        "UPDATE custom_print_filaments SET consumedAt = ? "
-        "WHERE printId = ? AND spoolId = ?",
-        (at_ms, print_id, spool_id),
+        "UPDATE custom_print_filaments SET consumedAt = ? WHERE id = ?",
+        (at_ms, filament_row_id),
     )
 
 
@@ -334,19 +347,26 @@ def rollup_window(
     if until_ms is not None:
         where += " AND COALESCE(p.completedAt, p.startedAt, p.createdAt) < ?"
         params.append(until_ms)
+    # Subquery on p makes each print contribute once to total_minutes
+    # regardless of how many filament rows it has.
     row = cur.execute(
         f"""
         SELECT
-            COUNT(DISTINCT p.id)                         AS count,
-            COALESCE(SUM(p.actDurationMin),
-                     SUM(p.estDurationMin), 0)           AS total_minutes,
-            COALESCE(SUM(f.usedWeightG),
-                     SUM(f.estWeightG), 0)               AS total_weight_g
-        FROM custom_prints p
-        LEFT JOIN custom_print_filaments f ON f.printId = p.id
-        WHERE p.status = 'completed' AND {where}
+            (SELECT COUNT(*) FROM custom_prints p
+             WHERE p.status = 'completed' AND {where})            AS count,
+            COALESCE((
+                SELECT SUM(COALESCE(p.actDurationMin, p.estDurationMin, 0))
+                FROM custom_prints p
+                WHERE p.status = 'completed' AND {where}
+            ), 0)                                                 AS total_minutes,
+            COALESCE((
+                SELECT SUM(COALESCE(f.usedWeightG, f.estWeightG, 0))
+                FROM custom_print_filaments f
+                JOIN custom_prints p ON p.id = f.printId
+                WHERE p.status = 'completed' AND {where}
+            ), 0)                                                 AS total_weight_g
         """,
-        params,
+        params * 3,
     ).fetchone()
     return {
         "count": int(row["count"] or 0),
