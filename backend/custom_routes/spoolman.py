@@ -36,6 +36,7 @@ _UUID_RE = re.compile(
 from custom_spoolman import settings as ss
 from custom_spoolman.client import SpoolmanClient, SpoolmanError
 from custom_spoolman.slicer_parse import parse_file_bytes
+from custom_prints import repo as prints_repo
 
 
 log = logging.getLogger(__name__)
@@ -312,4 +313,95 @@ def _slice_md_to_dto(md, *, source: str) -> Dict[str, Any]:
         "estDurationMin": md.est_duration_min,
         "filamentColorHex": md.filament_color_hex,
         "empty": md.is_empty(),
+    }
+
+
+@router.get("/reconciliation")
+def reconciliation() -> Dict[str, Any]:
+    """STLVault vs. Spoolman per-spool consumption gap.
+
+    For every spool that EITHER side has touched, returns:
+        {
+          id, label, colorHex, material,
+          stlvaultLoggedG,   # SUM(usedWeightG) of synced+consumed prints
+          spoolmanUsedG,     # current used_weight in Spoolman
+          gapG,              # spoolmanUsedG - stlvaultLoggedG
+          archived
+        }
+
+    A positive gap means Spoolman shows more usage than STLVault has
+    logged — typically: forgotten prints, failed-print purges not
+    logged, material consumed by another tool, or material the user
+    deducted manually in Spoolman. A negative gap means STLVault
+    logged more than Spoolman has used — usually only possible if
+    someone reset Spoolman's `used_weight` directly.
+
+    This is the operational consequence of the integration being a
+    self-reported ledger: the gap surfaces the work the user has to
+    remember to do, instead of leaving it as a private worry.
+    """
+    client = _require_client()
+
+    # Pull STLVault's per-spool synced totals.
+    conn = _get_db()
+    try:
+        stlvault_per_spool = prints_repo.per_spool_consumption(conn, synced_only=True)
+    finally:
+        conn.close()
+
+    # Pull Spoolman's full spool list once — cheaper than per-spool GETs.
+    try:
+        raw_spools = client.list_spools(archived=True)  # include archived for gap calc
+    except SpoolmanError as e:
+        raise HTTPException(status_code=502, detail=e.message)
+
+    spoolman_by_id: Dict[int, Dict[str, Any]] = {
+        s["id"]: s for s in raw_spools if s.get("id") is not None
+    }
+
+    # Union of spool ids STLVault knows about OR Spoolman has.
+    all_ids = set(stlvault_per_spool.keys()) | set(spoolman_by_id.keys())
+
+    rows: List[Dict[str, Any]] = []
+    totals = {"stlvaultLoggedG": 0.0, "spoolmanUsedG": 0.0}
+    for sid in all_ids:
+        stl = stlvault_per_spool.get(sid, 0.0)
+        spool = spoolman_by_id.get(sid)
+        spm_used = float((spool or {}).get("used_weight") or 0.0)
+        filament = (spool or {}).get("filament") or {}
+        vendor = filament.get("vendor") or {}
+        name = filament.get("name")
+        vendor_name = vendor.get("name")
+        label_parts = [vendor_name, name] if vendor_name else [name]
+        label = " ".join(p for p in label_parts if p) or (
+            f"Spool #{sid} (deleted in Spoolman)"
+            if spool is None
+            else f"Spool #{sid}"
+        )
+        rows.append(
+            {
+                "id": sid,
+                "label": label,
+                "colorHex": filament.get("color_hex"),
+                "material": filament.get("material"),
+                "stlvaultLoggedG": round(stl, 2),
+                "spoolmanUsedG": round(spm_used, 2),
+                "gapG": round(spm_used - stl, 2),
+                "archived": bool((spool or {}).get("archived")),
+                "presentInSpoolman": spool is not None,
+            }
+        )
+        totals["stlvaultLoggedG"] += stl
+        totals["spoolmanUsedG"] += spm_used
+
+    # Order: largest absolute gap first — that's what the user wants to see.
+    rows.sort(key=lambda r: abs(r["gapG"]), reverse=True)
+
+    return {
+        "rows": rows,
+        "totals": {
+            "stlvaultLoggedG": round(totals["stlvaultLoggedG"], 2),
+            "spoolmanUsedG": round(totals["spoolmanUsedG"], 2),
+            "gapG": round(totals["spoolmanUsedG"] - totals["stlvaultLoggedG"], 2),
+        },
     }

@@ -326,7 +326,10 @@ const PrintRow: React.FC<{
 }> = ({ print, busy, spoolmanBaseUrl, onResync, onComplete, onDelete }) => {
   const f = print.filaments[0];
   const displayWeight = f?.usedWeightG ?? f?.estWeightG ?? null;
-  const displayDuration = print.actDurationMin ?? print.estDurationMin ?? null;
+  // Prefer the user's observed wall-clock; fall back to the slicer's
+  // active-extrusion estimate. Different physical quantities — see
+  // repo.rollup_window docs.
+  const displayDuration = print.wallClockMin ?? print.estDurationMin ?? null;
   const isUnsynced = print.status === "completed" && !print.syncedToSpoolman;
 
   // "printing" status doesn't mean a printer is observably running —

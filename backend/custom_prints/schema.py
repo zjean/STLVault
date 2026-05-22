@@ -15,6 +15,15 @@ def ensure_prints_tables(conn: sqlite3.Connection) -> None:
     - `spoolId` -> Spoolman, lives in a different DB entirely.
     """
     cur = conn.cursor()
+    # `wallClockMin` and `estDurationMin` measure DIFFERENT physical
+    # quantities and the column names now say which:
+    #   - estDurationMin = slicer's predicted ACTIVE extrusion time
+    #     (toolhead moving; ignores pauses, filament changes).
+    #   - wallClockMin   = user-observed elapsed time from start to
+    #     finish (includes pauses). Typed by the user at completion.
+    # Earlier this column was called `actDurationMin` — vague, since
+    # "actual" could mean either "actual active" or "actual elapsed."
+    # See migration block below for existing DBs.
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS custom_prints (
@@ -24,7 +33,7 @@ def ensure_prints_tables(conn: sqlite3.Connection) -> None:
             startedAt         INTEGER,
             completedAt       INTEGER,
             estDurationMin    INTEGER,
-            actDurationMin    INTEGER,
+            wallClockMin      INTEGER,
             printer           TEXT,
             notes             TEXT,
             syncedToSpoolman  INTEGER NOT NULL DEFAULT 0,
@@ -32,6 +41,16 @@ def ensure_prints_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+    # In-place rename for databases that predate this rename. SQLite
+    # supports ALTER TABLE RENAME COLUMN since 3.25 (2018). The check
+    # is idempotent: only renames when the old name is present and the
+    # new name is not.
+    cols = {row["name"] for row in cur.execute("PRAGMA table_info(custom_prints)")}
+    if "actDurationMin" in cols and "wallClockMin" not in cols:
+        cur.execute(
+            "ALTER TABLE custom_prints RENAME COLUMN actDurationMin TO wallClockMin"
+        )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS custom_print_filaments (

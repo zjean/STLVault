@@ -26,6 +26,7 @@ import {
   spoolmanApi,
   type SpoolmanSettings,
   type SpoolSummary,
+  type ReconciliationReport,
 } from "../../services/custom-spoolman";
 
 // Global Prints view — listed in the Sidebar as "Prints".
@@ -123,6 +124,13 @@ const PrintsHistoryView: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Reconciliation panel state — loads independently from the prints
+  // list so a slow/down Spoolman doesn't block the history view.
+  const [recon, setRecon] = useState<ReconciliationReport | null>(null);
+  const [reconLoading, setReconLoading] = useState(false);
+  const [reconError, setReconError] = useState<string | null>(null);
+  const [reconOpen, setReconOpen] = useState(false);
+
   // Filters
   const [statusFilter, setStatusFilter] = useState<PrintStatus | "">("");
   const [spoolFilter, setSpoolFilter] = useState<number | "">("");
@@ -175,6 +183,26 @@ const PrintsHistoryView: React.FC<Props> = ({
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  const loadReconciliation = useCallback(async () => {
+    setReconLoading(true);
+    setReconError(null);
+    try {
+      setRecon(await spoolmanApi.reconciliation());
+    } catch (e) {
+      setReconError(e instanceof Error ? e.message : "Failed to load reconciliation");
+    } finally {
+      setReconLoading(false);
+    }
+  }, []);
+
+  // Lazy-fetch when the user opens the panel — saves a Spoolman roundtrip
+  // for users who never look at it.
+  useEffect(() => {
+    if (reconOpen && recon == null && !reconLoading) {
+      void loadReconciliation();
+    }
+  }, [reconOpen, recon, reconLoading, loadReconciliation]);
 
   const modelById = useMemo(() => {
     const m: Record<string, STLModel> = {};
@@ -344,9 +372,171 @@ const PrintsHistoryView: React.FC<Props> = ({
               })}
             </ul>
           )}
+
+          {/* Reconciliation — collapsed by default to keep the page light. */}
+          <ReconciliationPanel
+            open={reconOpen}
+            onToggle={() => setReconOpen((v) => !v)}
+            report={recon}
+            loading={reconLoading}
+            error={reconError}
+            spoolmanBaseUrl={settings?.baseUrl ?? null}
+            onRefresh={() => void loadReconciliation()}
+          />
         </div>
       </div>
     </div>
+  );
+};
+
+// --- Reconciliation panel ---
+//
+// STLVault is a self-reported ledger. The user can forget to log a print
+// (Spoolman moves; STLVault doesn't), log a print they didn't actually
+// run (STLVault moves; nothing else), or consume material outside of
+// STLVault entirely. The reconciliation panel surfaces the gap so it's
+// glanceable instead of being a private worry.
+
+const ReconciliationPanel: React.FC<{
+  open: boolean;
+  onToggle: () => void;
+  report: ReconciliationReport | null;
+  loading: boolean;
+  error: string | null;
+  spoolmanBaseUrl: string | null;
+  onRefresh: () => void;
+}> = ({ open, onToggle, report, loading, error, spoolmanBaseUrl, onRefresh }) => {
+  const stripApi = (u: string | null) => (u ? u.replace(/\/api\/v1\/?$/, "") : "");
+  const totalGap = report?.totals.gapG ?? 0;
+  const gapTone =
+    Math.abs(totalGap) < 1
+      ? "text-fg-3"
+      : totalGap > 0
+        ? "text-warning"
+        : "text-accent";
+
+  return (
+    <section className="mt-2 rounded-[10px] border border-border-soft bg-surface">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-surface-2 transition-colors rounded-[10px]"
+        aria-expanded={open}
+      >
+        <Scale size={14} className="text-fg-3" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-medium text-fg">
+            Reconciliation with Spoolman
+          </div>
+          <div className="text-[11.5px] text-fg-3">
+            {report
+              ? `Spoolman ${formatGrams(report.totals.spoolmanUsedG)} used · ` +
+                `STLVault ${formatGrams(report.totals.stlvaultLoggedG)} logged · ` +
+                `gap ${totalGap >= 0 ? "+" : ""}${formatGrams(totalGap)}`
+              : "Where forgotten prints and off-vault consumption show up"}
+          </div>
+        </div>
+        {report && (
+          <span className={`text-[14px] font-mono ${gapTone}`}>
+            {totalGap >= 0 ? "+" : ""}
+            {formatGrams(totalGap)}
+          </span>
+        )}
+        <ChevronLeft
+          size={14}
+          className={`text-fg-3 transition-transform ${open ? "-rotate-90" : "rotate-180"}`}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-border-soft px-4 py-3">
+          {loading && !report ? (
+            <div className="text-[12.5px] text-fg-3 inline-flex items-center gap-2">
+              <Loader2 size={12} className="animate-spin" /> Loading…
+            </div>
+          ) : error ? (
+            <div className="px-3 py-2 bg-danger/10 border border-danger/30 rounded-lg text-[12.5px] text-danger">
+              {error}
+            </div>
+          ) : report && report.rows.length === 0 ? (
+            <p className="text-[12.5px] text-fg-3 m-0">
+              No spools to reconcile yet.
+            </p>
+          ) : report ? (
+            <>
+              <p className="text-[11.5px] text-fg-3 m-0 mb-2 leading-relaxed">
+                Positive gap = Spoolman used more than STLVault logged (probably
+                a forgotten print or off-vault consumption). Negative gap =
+                STLVault logged more than Spoolman has used (rare — likely a
+                manual Spoolman edit). Largest gaps first.
+              </p>
+              <ul className="flex flex-col gap-1">
+                {report.rows.map((r) => {
+                  const tone =
+                    Math.abs(r.gapG) < 1
+                      ? "text-fg-3"
+                      : r.gapG > 0
+                        ? "text-warning"
+                        : "text-accent";
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-bg-3 border border-border-soft rounded-md text-[12.5px]"
+                    >
+                      {r.colorHex && (
+                        <span
+                          aria-hidden
+                          className="w-3 h-3 rounded-full border border-border-soft flex-shrink-0"
+                          style={{ backgroundColor: `#${r.colorHex}` }}
+                        />
+                      )}
+                      <span className="flex-1 min-w-0 truncate text-fg">
+                        {r.label}
+                        {r.archived && (
+                          <span className="text-fg-3"> (archived)</span>
+                        )}
+                      </span>
+                      <span className="font-mono text-fg-3 flex-shrink-0">
+                        STL {formatGrams(r.stlvaultLoggedG)} · SM{" "}
+                        {formatGrams(r.spoolmanUsedG)}
+                      </span>
+                      <span
+                        className={`font-mono font-medium flex-shrink-0 ${tone}`}
+                      >
+                        {r.gapG >= 0 ? "+" : ""}
+                        {formatGrams(r.gapG)}
+                      </span>
+                      {spoolmanBaseUrl && r.presentInSpoolman && (
+                        <a
+                          href={`${stripApi(spoolmanBaseUrl)}/spool/show/${r.id}`}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="text-accent hover:underline inline-flex items-center"
+                          title={`Open spool #${r.id} in Spoolman`}
+                        >
+                          <ExternalLink size={10} />
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  className="inline-flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg disabled:opacity-50"
+                >
+                  <RefreshCw size={11} className={loading ? "animate-spin" : ""} />{" "}
+                  Refresh
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -413,7 +603,8 @@ const HistoryRow: React.FC<{
 }> = ({ print, model, spoolmanBaseUrl, onOpenModel }) => {
   const f = print.filaments[0];
   const weight = f?.usedWeightG ?? f?.estWeightG ?? null;
-  const minutes = print.actDurationMin ?? print.estDurationMin ?? null;
+  // Prefer wall-clock (user-observed), fall back to slicer estimate.
+  const minutes = print.wallClockMin ?? print.estDurationMin ?? null;
   const isUnsynced = print.status === "completed" && !print.syncedToSpoolman;
   const tone = STATUS_TONES[print.status];
 

@@ -122,8 +122,12 @@ class CreatePrintBody(BaseModel):
     )
     startedAt: Optional[int] = None
     completedAt: Optional[int] = None
+    # estDurationMin: slicer's predicted active extrusion time.
+    # wallClockMin:   elapsed start-to-finish as observed by the user.
+    # Different physical quantities — the rollup mixes them only as a
+    # rough dashboard figure (see repo.rollup_window docstring).
     estDurationMin: Optional[int] = None
-    actDurationMin: Optional[int] = None
+    wallClockMin: Optional[int] = None
     printer: Optional[str] = None
     notes: Optional[str] = None
 
@@ -135,7 +139,7 @@ class CompletePrintBody(BaseModel):
                     "were stored when the print was started.",
     )
     completedAt: Optional[int] = None
-    actDurationMin: Optional[int] = None
+    wallClockMin: Optional[int] = None
     notes: Optional[str] = None
     status: str = Field(default=prints_repo.STATUS_COMPLETED)
 
@@ -143,7 +147,7 @@ class CompletePrintBody(BaseModel):
 class PatchPrintBody(BaseModel):
     status: Optional[str] = None
     completedAt: Optional[int] = None
-    actDurationMin: Optional[int] = None
+    wallClockMin: Optional[int] = None
     notes: Optional[str] = None
 
 
@@ -332,7 +336,7 @@ def create_for_model(model_id: str, body: CreatePrintBody) -> Dict[str, Any]:
             started_at=body.startedAt,
             completed_at=body.completedAt,
             est_duration_min=body.estDurationMin,
-            act_duration_min=body.actDurationMin,
+            wall_clock_min=body.wallClockMin,
             printer=body.printer,
             notes=body.notes,
         )
@@ -400,7 +404,7 @@ def patch_one(print_id: str, body: PatchPrintBody) -> Dict[str, Any]:
             print_id,
             status=body.status,
             completed_at=body.completedAt,
-            act_duration_min=body.actDurationMin,
+            wall_clock_min=body.wallClockMin,
             notes=body.notes,
         )
         if changed:
@@ -482,7 +486,7 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
             print_id,
             status=body.status,
             completed_at=body.completedAt or prints_repo.now_ms(),
-            act_duration_min=body.actDurationMin,
+            wall_clock_min=body.wallClockMin,
             notes=body.notes,
         )
         conn.commit()

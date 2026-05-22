@@ -45,8 +45,10 @@ def _row_to_print(row: sqlite3.Row, filaments: List[Dict[str, Any]]) -> Dict[str
         "status": row["status"],
         "startedAt": row["startedAt"],
         "completedAt": row["completedAt"],
+        # estDurationMin: slicer's predicted active extrusion time
+        # wallClockMin: user-observed elapsed start-to-finish time
         "estDurationMin": row["estDurationMin"],
-        "actDurationMin": row["actDurationMin"],
+        "wallClockMin": row["wallClockMin"],
         "printer": row["printer"],
         "notes": row["notes"],
         "syncedToSpoolman": bool(row["syncedToSpoolman"]),
@@ -79,7 +81,7 @@ def insert_print(
     started_at: Optional[int] = None,
     completed_at: Optional[int] = None,
     est_duration_min: Optional[int] = None,
-    act_duration_min: Optional[int] = None,
+    wall_clock_min: Optional[int] = None,
     printer: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> str:
@@ -89,6 +91,10 @@ def insert_print(
         { spoolId, estWeightG?, usedWeightG?, estLengthMm?,
           usedLengthMm?, spoolLabel?, filamentColor? }
     Caller is responsible for commit.
+
+    Time fields:
+      - est_duration_min: slicer's predicted active extrusion time.
+      - wall_clock_min:   elapsed start-to-finish as observed by the user.
     """
     if status not in ALL_STATUSES:
         raise ValueError(f"Invalid status: {status}")
@@ -100,7 +106,7 @@ def insert_print(
         """
         INSERT INTO custom_prints
             (id, modelId, status, startedAt, completedAt, estDurationMin,
-             actDurationMin, printer, notes, syncedToSpoolman, createdAt)
+             wallClockMin, printer, notes, syncedToSpoolman, createdAt)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         """,
         (
@@ -110,7 +116,7 @@ def insert_print(
             started_at,
             completed_at,
             est_duration_min,
-            act_duration_min,
+            wall_clock_min,
             printer or DEFAULT_PRINTER,
             notes,
             now,
@@ -242,7 +248,7 @@ def update_print_fields(
     *,
     status: Optional[str] = None,
     completed_at: Optional[int] = None,
-    act_duration_min: Optional[int] = None,
+    wall_clock_min: Optional[int] = None,
     notes: Optional[str] = None,
 ) -> bool:
     """Partial update for PATCH. Returns True if a row changed."""
@@ -256,9 +262,9 @@ def update_print_fields(
     if completed_at is not None:
         sets.append("completedAt = ?")
         vals.append(completed_at)
-    if act_duration_min is not None:
-        sets.append("actDurationMin = ?")
-        vals.append(act_duration_min)
+    if wall_clock_min is not None:
+        sets.append("wallClockMin = ?")
+        vals.append(wall_clock_min)
     if notes is not None:
         sets.append("notes = ?")
         vals.append(notes)
@@ -387,6 +393,39 @@ def delete_print(conn: sqlite3.Connection, print_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def per_spool_consumption(
+    conn: sqlite3.Connection,
+    *,
+    synced_only: bool = True,
+) -> Dict[int, float]:
+    """Sum of usedWeightG per spool across STLVault's print log.
+
+    Used by the reconciliation view: STLVault's logged total per spool
+    vs. Spoolman's `used_weight` per spool. The gap surfaces forgotten
+    prints, manual Spoolman edits, and material consumed by other
+    tools attached to the same spool.
+
+    ``synced_only`` (default True) restricts to rows where the print
+    actually deducted from Spoolman — otherwise locally-logged-but-
+    unsynced prints would be double-counted against Spoolman state.
+    """
+    cur = conn.cursor()
+    sql = """
+        SELECT f.spoolId, SUM(COALESCE(f.usedWeightG, 0)) AS total
+        FROM custom_print_filaments f
+    """
+    if synced_only:
+        sql += """
+        JOIN custom_prints p ON p.id = f.printId
+        WHERE p.syncedToSpoolman = 1 AND f.consumedAt IS NOT NULL
+        """
+    sql += " GROUP BY f.spoolId"
+    return {
+        row["spoolId"]: float(row["total"] or 0)
+        for row in cur.execute(sql).fetchall()
+    }
+
+
 def rollup_window(
     conn: sqlite3.Connection, *, since_ms: int, until_ms: Optional[int] = None
 ) -> Dict[str, Any]:
@@ -395,14 +434,14 @@ def rollup_window(
     Returns ``{count, totalMinutes, totalWeightG}``. The fields are
     sums of completed prints' per-row preferred values:
 
-    - ``totalMinutes`` per row = ``actDurationMin`` if the user entered
-      one, else ``estDurationMin`` (the slicer's prediction), else 0.
-      These are NOT the same physical quantity: slicer estimates are
-      active extrusion time, while user-entered values are typically
-      wall-clock start-to-finish. The rollup mixes them on purpose —
-      a single rough "time spent printing" figure is more useful in
-      the dashboard than two empty cards. If you need precision, the
-      per-print rows on the history view carry both values separately.
+    - ``totalMinutes`` per row = ``wallClockMin`` if the user entered
+      one (elapsed time including pauses), else ``estDurationMin``
+      (the slicer's predicted active extrusion time), else 0.
+      These are NOT the same physical quantity. The rollup mixes them
+      on purpose — a single rough "time spent printing" figure is more
+      useful in the dashboard than two empty cards. The per-print
+      rows in the history view carry both values separately when you
+      need precision.
 
     - ``totalWeightG`` per row = ``usedWeightG`` if set, else
       ``estWeightG``. These are the same physical quantity (mass of
@@ -422,7 +461,7 @@ def rollup_window(
             (SELECT COUNT(*) FROM custom_prints p
              WHERE p.status = 'completed' AND {where})            AS count,
             COALESCE((
-                SELECT SUM(COALESCE(p.actDurationMin, p.estDurationMin, 0))
+                SELECT SUM(COALESCE(p.wallClockMin, p.estDurationMin, 0))
                 FROM custom_prints p
                 WHERE p.status = 'completed' AND {where}
             ), 0)                                                 AS total_minutes,

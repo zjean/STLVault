@@ -50,7 +50,9 @@ interface FormState {
   estLengthMm: string;
   usedLengthMm: string;
   estDurationMin: string;
-  actDurationMin: string;
+  // Elapsed start-to-finish as observed by the user. Distinct from
+  // estDurationMin which is the slicer's active-extrusion prediction.
+  wallClockMin: string;
   status: PrintStatus;
   notes: string;
 }
@@ -62,7 +64,7 @@ const EMPTY_FORM: FormState = {
   estLengthMm: "",
   usedLengthMm: "",
   estDurationMin: "",
-  actDurationMin: "",
+  wallClockMin: "",
   status: "completed",
   notes: "",
 };
@@ -153,10 +155,10 @@ const LogPrintDialog: React.FC<Props> = ({
         mode !== "start" && !f.usedLengthMm && md.estLengthMm != null
           ? String(Math.round(md.estLengthMm))
           : f.usedLengthMm,
-      actDurationMin:
-        mode !== "start" && !f.actDurationMin && md.estDurationMin != null
+      wallClockMin:
+        mode !== "start" && !f.wallClockMin && md.estDurationMin != null
           ? String(md.estDurationMin)
-          : f.actDurationMin,
+          : f.wallClockMin,
     }));
   };
 
@@ -190,9 +192,9 @@ const LogPrintDialog: React.FC<Props> = ({
           existingPrint.estDurationMin != null
             ? String(existingPrint.estDurationMin)
             : "",
-        actDurationMin:
-          existingPrint.actDurationMin != null
-            ? String(existingPrint.actDurationMin)
+        wallClockMin:
+          existingPrint.wallClockMin != null
+            ? String(existingPrint.wallClockMin)
             : existingPrint.estDurationMin != null
               ? String(existingPrint.estDurationMin)
               : "",
@@ -301,7 +303,7 @@ const LogPrintDialog: React.FC<Props> = ({
       const estL = numOrNull(form.estLengthMm);
       const usedL = numOrNull(form.usedLengthMm);
       const estDur = parseDurationInput(form.estDurationMin);
-      const actDur = parseDurationInput(form.actDurationMin);
+      const wallClock = parseDurationInput(form.wallClockMin);
       const notes = form.notes.trim() || null;
 
       let result: { print: Print; sync: SyncResult };
@@ -325,7 +327,7 @@ const LogPrintDialog: React.FC<Props> = ({
             },
           ],
           completedAt: Date.now(),
-          actDurationMin: actDur,
+          wallClockMin: wallClock,
           notes,
         });
       } else if (mode === "start") {
@@ -357,7 +359,7 @@ const LogPrintDialog: React.FC<Props> = ({
             },
           ],
           estDurationMin: estDur,
-          actDurationMin: actDur,
+          wallClockMin: wallClock,
           completedAt: Date.now(),
           notes,
         });
@@ -537,13 +539,15 @@ const LogPrintDialog: React.FC<Props> = ({
               <Pair
                 label="Print time"
                 est={form.estDurationMin}
-                used={form.actDurationMin}
+                used={form.wallClockMin}
                 onEst={(v) => setForm((f) => ({ ...f, estDurationMin: v }))}
-                onUsed={(v) => setForm((f) => ({ ...f, actDurationMin: v }))}
+                onUsed={(v) => setForm((f) => ({ ...f, wallClockMin: v }))}
                 showUsed={showUsedColumn}
                 placeholder="1h 35m"
                 estLabel={parseResult?.estDurationMin ?? null}
                 formatter={(n) => formatMinutes(n)}
+                estHint="Slicer active extrusion time"
+                usedHint="Wall-clock start to finish"
               />
             </div>
           </div>
@@ -728,6 +732,11 @@ const Pair: React.FC<{
   placeholder: string;
   estLabel: number | null;
   formatter?: (n: number) => string;
+  // Optional explanatory captions for the columns. Useful for the
+  // "Print time" pair where est = slicer's active-extrusion time and
+  // used = user-observed wall-clock — two different physical quantities.
+  estHint?: string;
+  usedHint?: string;
 }> = ({
   label,
   est,
@@ -738,9 +747,13 @@ const Pair: React.FC<{
   placeholder,
   estLabel,
   formatter,
+  estHint,
+  usedHint,
 }) => {
-  const estHint =
+  const slicerEstStr =
     estLabel != null ? (formatter ? formatter(estLabel) : String(estLabel)) : null;
+  const estCaption = estHint ?? (showUsed ? "Estimated" : "Estimated value");
+  const usedCaption = usedHint ?? "Actual";
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-[12px] font-medium text-fg-2">{label}</span>
@@ -757,8 +770,8 @@ const Pair: React.FC<{
             className="px-3 py-2 bg-surface border border-border rounded-lg text-[13px] text-fg outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/15 transition-all"
           />
           <span className="text-[10.5px] text-fg-3 px-0.5">
-            {showUsed ? "Estimated" : "Estimated value"}
-            {estHint ? ` • slicer: ${estHint}` : ""}
+            {estCaption}
+            {slicerEstStr ? ` • slicer: ${slicerEstStr}` : ""}
           </span>
         </div>
         {showUsed && (
@@ -771,7 +784,7 @@ const Pair: React.FC<{
               placeholder={placeholder}
               className="px-3 py-2 bg-surface border border-border rounded-lg text-[13px] text-fg outline-none focus:border-accent focus:ring-[3px] focus:ring-accent/15 transition-all"
             />
-            <span className="text-[10.5px] text-fg-3 px-0.5">Actual</span>
+            <span className="text-[10.5px] text-fg-3 px-0.5">{usedCaption}</span>
           </div>
         )}
       </div>

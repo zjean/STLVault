@@ -32,7 +32,7 @@ export interface Print {
   startedAt: number | null;
   completedAt: number | null;
   estDurationMin: number | null;
-  actDurationMin: number | null;
+  wallClockMin: number | null;
   printer: string | null;
   notes: string | null;
   syncedToSpoolman: boolean;
@@ -59,7 +59,7 @@ export interface CreatePrintInput {
   startedAt?: number | null;
   completedAt?: number | null;
   estDurationMin?: number | null;
-  actDurationMin?: number | null;
+  wallClockMin?: number | null;
   printer?: string | null;
   notes?: string | null;
 }
@@ -75,7 +75,7 @@ export interface CompletePrintInput {
     usedLengthMm?: number | null;
   }[];
   completedAt?: number | null;
-  actDurationMin?: number | null;
+  wallClockMin?: number | null;
   notes?: string | null;
 }
 

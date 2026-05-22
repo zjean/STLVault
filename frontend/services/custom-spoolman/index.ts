@@ -47,6 +47,27 @@ export interface SpoolSummary {
   archived: boolean;
 }
 
+export interface ReconciliationRow {
+  id: number;
+  label: string;
+  colorHex: string | null;
+  material: string | null;
+  stlvaultLoggedG: number;
+  spoolmanUsedG: number;
+  gapG: number;
+  archived: boolean;
+  presentInSpoolman: boolean;
+}
+
+export interface ReconciliationReport {
+  rows: ReconciliationRow[];
+  totals: {
+    stlvaultLoggedG: number;
+    spoolmanUsedG: number;
+    gapG: number;
+  };
+}
+
 export interface SliceParseResult {
   source: string;
   estWeightG: number | null;
@@ -136,5 +157,9 @@ export const spoolmanApi = {
         { method: "POST" },
       ),
     );
+  },
+
+  reconciliation: async (): Promise<ReconciliationReport> => {
+    return jsonOrThrow(await fetch(`${BASE}/reconciliation`));
   },
 };
