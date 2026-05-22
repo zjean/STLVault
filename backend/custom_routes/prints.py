@@ -458,7 +458,7 @@ def resync_one(print_id: str) -> Dict[str, Any]:
         conn.close()
 
 
-# --- global history (PR 3 will add filters + rollups on top) ---
+# --- global history + rollups (PR 3) ---
 
 
 @router.get("/api/prints")
@@ -468,6 +468,8 @@ def list_all(
     status: Optional[str] = None,
     spoolId: Optional[int] = None,
     modelId: Optional[str] = None,
+    sinceMs: Optional[int] = None,
+    untilMs: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     conn = _get_db()
     try:
@@ -478,6 +480,24 @@ def list_all(
             status=status,
             spool_id=spoolId,
             model_id=modelId,
+            since_ms=sinceMs,
+            until_ms=untilMs,
+        )
+    finally:
+        conn.close()
+
+
+@router.get("/api/prints/stats/rollup")
+def rollup(sinceMs: int, untilMs: Optional[int] = None) -> Dict[str, Any]:
+    """Totals for completed prints within the window.
+
+    Returns {count, totalMinutes, totalWeightG}. Computed in SQL — see
+    custom_prints/repo.py::rollup_window.
+    """
+    conn = _get_db()
+    try:
+        return prints_repo.rollup_window(
+            conn, since_ms=sinceMs, until_ms=untilMs
         )
     finally:
         conn.close()

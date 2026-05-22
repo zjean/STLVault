@@ -19,6 +19,7 @@ import {
   LikedDesign,
 } from "./services/custom-importers";
 import MakerworldLikedModal from "./components/custom-importers/MakerworldLikedModal";
+import PrintsHistoryView from "./components/custom-spoolman/PrintsHistoryView";
 import {
   FolderInput,
   Tags,
@@ -65,6 +66,7 @@ const App = () => {
   const showSettings = location.pathname === "/settings";
   const showRecent = location.pathname === "/recent";
   const showTags = location.pathname === "/tags";
+  const showPrints = location.pathname === "/prints";
   const tagDetailMatch = location.pathname.match(/^\/tags\/(.+)$/);
   const showTagDetail = !!tagDetailMatch;
   const currentTagName = tagDetailMatch
@@ -761,6 +763,19 @@ const App = () => {
             onOpenMobileSidebar={
               !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
             }
+          />
+        ) : showPrints ? (
+          <PrintsHistoryView
+            models={models}
+            onBack={closeSettings}
+            onOpenMobileSidebar={
+              !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
+            }
+            onOpenModel={(m) => {
+              setCurrentFolderId(m.folderId);
+              setSelectedModelId(m.id);
+              navigate("/");
+            }}
           />
         ) : showTagDetail && currentTagName ? (
           <TagDetailView
