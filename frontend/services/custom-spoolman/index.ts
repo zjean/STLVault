@@ -5,6 +5,13 @@ import { resolveApiBase } from "../apiBase";
 
 const BASE = `${resolveApiBase()}/spoolman`;
 
+// Strip the `/api/v1` suffix from a Spoolman base URL to get the human
+// web UI root. Spoolman's API base is `https://host/api/v1` (per the
+// settings input) but the deep-link UI lives at `https://host/spool/...`.
+// Centralised so a future Spoolman versioning bump only changes one spot.
+export const spoolmanWebUrl = (baseUrl: string): string =>
+  baseUrl.replace(/\/api\/v1\/?$/, "");
+
 // ---- shapes ----
 
 export interface SpoolmanSettings {

@@ -89,6 +89,11 @@ const PostUploadLinkDialog: React.FC<Props> = ({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-event thumbnail-load failures. Hoisted to component scope since
+  // useState can't be called inside the iteration callback (rules of
+  // hooks) — that's what the previous hand-built `[false, () => {}]`
+  // placeholder was working around. Now wires up properly.
+  const [thumbErrored, setThumbErrored] = useState<Set<number>>(new Set());
 
   const handleSubmit = async () => {
     const toLink = reserves.filter((r) => checked[r.id]);
@@ -179,7 +184,7 @@ const PostUploadLinkDialog: React.FC<Props> = ({
           <ul className="divide-y divide-border-soft">
             {reserves.map((ev) => {
               const isChecked = !!checked[ev.id];
-              const [thumbErrored, _setThumbErrored] = [false, () => {}];
+              const errored = thumbErrored.has(ev.id);
               return (
                 <li key={ev.id} className="px-5 py-3 flex items-start gap-3">
                   <input
@@ -195,12 +200,19 @@ const PostUploadLinkDialog: React.FC<Props> = ({
                     className="mt-1 w-4 h-4 accent-accent"
                   />
                   <div className="w-12 h-12 flex-shrink-0 rounded-md bg-bg-3 overflow-hidden grid place-items-center">
-                    {thumbErrored ? (
+                    {errored ? (
                       <Printer size={14} className="text-fg-3" />
                     ) : (
                       <img
                         src={centauriApi.thumbnailUrl(ev.id)}
                         alt=""
+                        onError={() =>
+                          setThumbErrored((prev) => {
+                            const next = new Set(prev);
+                            next.add(ev.id);
+                            return next;
+                          })
+                        }
                         className="w-full h-full object-cover"
                       />
                     )}

@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Calendar,
   Check,
-  CheckCircle2,
   ChevronLeft,
   CircleSlash,
   Clock,
@@ -24,6 +23,7 @@ import {
 } from "../../services/custom-prints";
 import {
   spoolmanApi,
+  spoolmanWebUrl,
   type SpoolmanSettings,
   type SpoolSummary,
   type ReconciliationReport,
@@ -124,6 +124,12 @@ const PrintsHistoryView: React.FC<Props> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Request-seq guard: rapid filter changes (Range → 7d, 30d, 90d) fire
+  // overlapping loads; only the latest invocation's results should land.
+  // Each loadAll captures its sequence number; setState calls bail out
+  // if a newer request has since started.
+  const requestSeqRef = useRef(0);
+
   // Reconciliation panel state — loads independently from the prints
   // list so a slow/down Spoolman doesn't block the history view.
   const [recon, setRecon] = useState<ReconciliationReport | null>(null);
@@ -149,6 +155,7 @@ const PrintsHistoryView: React.FC<Props> = ({
   }, []);
 
   const loadAll = useCallback(async () => {
+    const mySeq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -156,6 +163,7 @@ const PrintsHistoryView: React.FC<Props> = ({
         spoolmanApi.getSettings(),
         spoolmanApi.listSpools().catch(() => [] as SpoolSummary[]),
       ]);
+      if (mySeq !== requestSeqRef.current) return;
       setSettings(s);
       setSpools(spoolList);
 
@@ -170,13 +178,15 @@ const PrintsHistoryView: React.FC<Props> = ({
         printsApi.rollup(monthSinceMs),
         printsApi.rollup(0),
       ]);
+      if (mySeq !== requestSeqRef.current) return;
       setPrints(list);
       setWindowRollup(monthly);
       setAllTime(lifetime);
     } catch (e) {
+      if (mySeq !== requestSeqRef.current) return;
       setError(e instanceof Error ? e.message : "Failed to load history");
     } finally {
-      setLoading(false);
+      if (mySeq === requestSeqRef.current) setLoading(false);
     }
   }, [statusFilter, spoolFilter, sinceMs, monthSinceMs]);
 
@@ -410,7 +420,6 @@ const ReconciliationPanel: React.FC<{
   spoolmanBaseUrl: string | null;
   onRefresh: () => void;
 }> = ({ open, onToggle, report, loading, error, spoolmanBaseUrl, onRefresh }) => {
-  const stripApi = (u: string | null) => (u ? u.replace(/\/api\/v1\/?$/, "") : "");
   const totalGap = report?.totals.gapG ?? 0;
   const gapTone =
     Math.abs(totalGap) < 1
@@ -512,7 +521,7 @@ const ReconciliationPanel: React.FC<{
                       </span>
                       {spoolmanBaseUrl && r.presentInSpoolman && (
                         <a
-                          href={`${stripApi(spoolmanBaseUrl)}/spool/show/${r.id}`}
+                          href={`${spoolmanWebUrl(spoolmanBaseUrl)}/spool/show/${r.id}`}
                           target="_blank"
                           rel="noreferrer noopener"
                           className="text-accent hover:underline inline-flex items-center"
