@@ -4,10 +4,12 @@ import {
   Check,
   CheckCircle2,
   CircleSlash,
+  Download,
   ExternalLink,
   Loader2,
   Play,
   Plus,
+  Printer,
   RefreshCw,
   Trash2,
   XCircle,
@@ -18,6 +20,7 @@ import {
   spoolmanApi,
   type SpoolmanSettings,
 } from "../../services/custom-spoolman";
+import { centauriApi } from "../../services/custom-centauri";
 import LogPrintDialog, { type DialogMode } from "./LogPrintDialog";
 
 interface Props {
@@ -376,14 +379,24 @@ const PrintRow: React.FC<{
       ? `started ${formatDate(startedMs)}`
       : formatDate(print.completedAt ?? print.startedAt ?? print.createdAt);
 
+  const isCentauri = print.source === "centauri";
+
   return (
     <li className="bg-surface border border-border-soft rounded-lg px-3 py-2.5 flex flex-col gap-1.5">
-      <div className="flex items-center gap-2 text-[12px]">
+      <div className="flex items-center gap-2 text-[12px] flex-wrap">
         <span className={`inline-flex items-center gap-1 font-medium ${statusLabel.tone}`}>
           {statusLabel.icon} {statusLabel.text}
         </span>
         <span className="text-fg-3">•</span>
         <span className="text-fg-3">{when}</span>
+        {isCentauri && (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-pill bg-accent/15 text-accent text-[10.5px] font-medium"
+            title="Logged automatically from the Centauri Carbon's job history"
+          >
+            <Printer size={10} /> From Centauri
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-[12.5px]">
@@ -445,6 +458,16 @@ const PrintRow: React.FC<{
             className="inline-flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg"
           >
             Spool <ExternalLink size={10} />
+          </a>
+        )}
+        {isCentauri && print.centauriEventId != null && (
+          <a
+            href={centauriApi.gcodeUrl(print.centauriEventId)}
+            download
+            className="inline-flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg"
+            title="Download the .gcode the printer ran for this job"
+          >
+            View source .gcode <Download size={10} />
           </a>
         )}
         <div className="flex-1" />

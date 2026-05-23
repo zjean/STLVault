@@ -182,6 +182,13 @@ export const centauriApi = {
     return `${apiBase()}/centauri/events/${eventId}/thumbnail`;
   },
 
+  // Serves the archived `.gcode` (Phase-2.2 enrichment artefact) with a
+  // download-friendly filename. 404 for legacy events that never ran the
+  // enrichment, or whose archive was pruned.
+  gcodeUrl(eventId: number): string {
+    return `${apiBase()}/centauri/events/${eventId}/gcode`;
+  },
+
   async review(
     eventId: number,
     action: "confirm" | "dismiss" | "reserve",

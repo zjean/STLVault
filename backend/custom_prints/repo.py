@@ -39,6 +39,14 @@ def now_ms() -> int:
 
 
 def _row_to_print(row: sqlite3.Row, filaments: List[Dict[str, Any]]) -> Dict[str, Any]:
+    # `source` and `centauriEventId` are surfaced so the detail panel can
+    # render a "Printed from Centauri" chip and link to the archived gcode
+    # for prints written by the centauri ingest path.
+    keys = row.keys() if hasattr(row, "keys") else []
+    source = row["source"] if "source" in keys else "manual"
+    centauri_event_id = (
+        row["centauriEventId"] if "centauriEventId" in keys else None
+    )
     return {
         "id": row["id"],
         "modelId": row["modelId"],
@@ -54,6 +62,8 @@ def _row_to_print(row: sqlite3.Row, filaments: List[Dict[str, Any]]) -> Dict[str
         "syncedToSpoolman": bool(row["syncedToSpoolman"]),
         "createdAt": row["createdAt"],
         "filaments": filaments,
+        "source": source,
+        "centauriEventId": centauri_event_id,
     }
 
 

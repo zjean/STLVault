@@ -393,6 +393,50 @@ async def event_thumbnail(event_id: int) -> StreamingResponse:
     return StreamingResponse(iter([r.content]), media_type="image/png")
 
 
+@router.get("/events/{event_id}/gcode")
+def event_gcode(event_id: int):
+    """Serve the archived `.gcode` we pulled off the printer for this event.
+
+    Path is what the enrichment step wrote (Phase 2.2). The serving filename
+    uses `gcodeFilename` so a manual save preserves the original name from
+    the printer instead of our internal "<startedAt>_<task_prefix>.gcode"
+    archive leaf. 404 if enrichment never ran (legacy events) or the file
+    was pruned by the archive's keep-N / older-than-D policy.
+
+    Safety: the archived path is always written by `_archive_gcode` under
+    `${FILE_STORAGE}/centauri/<printer_id>/...`. We reject any value that
+    resolves outside the upload root so a poisoned DB column can't read
+    arbitrary files.
+    """
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    import os
+
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    archived = ev.get("archivedGcodePath")
+    if not archived:
+        raise HTTPException(status_code=404, detail="no archived gcode for this event")
+
+    upload_root = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    try:
+        path = Path(archived).resolve()
+        path.relative_to(upload_root)
+    except (ValueError, OSError) as e:
+        log.warning("centauri gcode serve: rejected path %r (%s)", archived, e)
+        raise HTTPException(status_code=404, detail="gcode file not found") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="gcode file not found")
+
+    download_name = ev.get("gcodeFilename") or path.name
+    return FileResponse(
+        path,
+        media_type="text/plain; charset=utf-8",
+        filename=download_name,
+    )
+
+
 UNDO_WINDOW_SECONDS = 7 * 24 * 3600  # 7 days; matches the design's revisit horizon
 
 
