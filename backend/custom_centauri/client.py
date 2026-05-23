@@ -39,6 +39,14 @@ from . import sdcp, gcode_meta
 ARCHIVE_KEEP_COUNT = 50
 ARCHIVE_KEEP_DAYS = 30
 
+# History backfill: how many of the printer's most-recent jobs to scan
+# per WS handshake. The Cmd 320 GET_HISTORY response returns task UUIDs
+# in newest-first order; we walk this prefix and only enrich rows that
+# weren't already in the DB. Repeating the scan on reconnect is cheap
+# (the dedup check is a single indexed SELECT), so the cap exists only
+# to bound the *first* backfill's runtime.
+HISTORY_BACKFILL_LIMIT = 50
+
 log = logging.getLogger(__name__)
 
 
@@ -106,12 +114,19 @@ class CentauriClient:
         ingest: IngestionCallback,
         *,
         upload_dir: Path | str | None = None,
+        exists_check: Callable[[str, str], bool] | None = None,
     ) -> None:
         self._ingest = ingest
         # Archive root for enriched event payloads. When None, archiving
         # is disabled (the enrichment still extracts metadata, it just
         # doesn't keep a copy of the gcode).
         self._upload_dir = Path(upload_dir) if upload_dir else None
+        # Cheap "is this (printer_id, task_id) already in the DB?" probe
+        # used by the history backfill to avoid Cmd 321 + HTTP fetch on
+        # already-known UUIDs. Without it the backfill silently disables
+        # itself — the unique-key dedup inside ingest still keeps
+        # correctness but wastes a lot of LAN traffic.
+        self._exists_check: Callable[[str, str], bool] | None = exists_check
         self._printer_ip: str | None = None
         self._mainboard_id: str | None = None
         self._task: asyncio.Task[None] | None = None
@@ -300,6 +315,11 @@ class CentauriClient:
             # out so post-disconnect callers fail closed rather than
             # writing into a torn-down connection.
             self._ws = ws
+            # Reset the once-per-session backfill guard so each
+            # reconnect re-scans the printer's history. Already-known
+            # UUIDs are skipped cheaply via _exists_check; only genuine
+            # new rows pay for Cmd 321 + HTTP fetch.
+            self._backfill_done_this_session = False
             self._snapshot = PrinterStatusSnapshot(
                 connected=True,
                 printer_ip=host,
@@ -367,6 +387,14 @@ class CentauriClient:
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("centauri: failed to send bootstrap packets")
+
+                # Kick off the history backfill concurrently with the
+                # read loop. Done as a tracked task so a disconnect mid-
+                # backfill is cancellable; the loop runs in the same
+                # event-loop slice that handles the Cmd 320/321 responses
+                # so `send_request` resolves cleanly. Failures are
+                # logged-and-swallowed — live ingestion stays primary.
+                self._spawn_backfill()
 
             # Read loop. Late-arriving Attributes pushes can still teach
             # us the mainboard ID, in which case we re-send the subscribe.
@@ -560,24 +588,208 @@ class CentauriClient:
             # the event when (or whether) enrichment succeeds.
             self._spawn_enrichment(event, job.task_id)
 
-    def _spawn_enrichment(self, event: dict[str, Any], task_id: str) -> None:
+    def _spawn_enrichment(
+        self,
+        event: dict[str, Any],
+        task_id: str,
+        *,
+        prefetched_detail: dict[str, Any] | None = None,
+    ) -> None:
         """Fork a background task that enriches + ingests the event.
 
         Tracked in `_enrich_tasks` so stop() can wait on outstanding
-        enrichment before tearing the loop down.
+        enrichment before tearing the loop down. `prefetched_detail`
+        lets the backfill path skip the inner Cmd 321 round-trip — it
+        passes the dict it already fetched.
         """
         loop = asyncio.get_running_loop()
         t = loop.create_task(
-            self._enrich_and_ingest(event, task_id),
+            self._enrich_and_ingest(event, task_id, prefetched_detail=prefetched_detail),
             name=f"centauri-enrich-{task_id}",
         )
         self._enrich_tasks.add(t)
         t.add_done_callback(self._enrich_tasks.discard)
 
-    async def _enrich_and_ingest(self, event: dict[str, Any], task_id: str) -> None:
+    def _spawn_backfill(self) -> None:
+        """Fork the history-backfill task once per session.
+
+        Tracked alongside enrichment tasks in `_enrich_tasks` so stop()
+        drains it. Guarded against double-spawning per session — the
+        backfill itself dedupes against the DB, so an extra run is
+        harmless, but spinning up the work for nothing wastes a Cmd 320
+        round-trip.
+        """
+        if getattr(self, "_backfill_done_this_session", False):
+            return
+        if self._exists_check is None:
+            # No way to dedupe → can't bound the HTTP cost. Skip.
+            log.debug("centauri backfill: no exists_check wired, skipping")
+            return
+        self._backfill_done_this_session = True
+        loop = asyncio.get_running_loop()
+        t = loop.create_task(
+            self._backfill_history(), name="centauri-backfill"
+        )
+        self._enrich_tasks.add(t)
+        t.add_done_callback(self._enrich_tasks.discard)
+
+    async def _backfill_history(self) -> None:
+        """Walk the printer's recent history and ingest any unseen jobs.
+
+        1. Cmd 320 GET_HISTORY → task UUIDs newest-first.
+        2. For each UUID, fast existence check against the DB —
+           skip if already known.
+        3. Otherwise Cmd 321 once to learn TaskName + MD5 + timestamps,
+           build the event dict, and hand off to _enrich_and_ingest
+           with the Cmd 321 result pre-supplied so it skips its inner
+           Cmd 321 call.
+
+        Bounded by HISTORY_BACKFILL_LIMIT — only the newest N task UUIDs
+        are processed per reconnect. Re-runs cost one Cmd 320 + N tiny
+        DB lookups; the expensive Cmd 321 + HTTP fetch only happens for
+        genuinely-new rows.
+        """
+        if self._ingest is None or self._mainboard_id is None or self._exists_check is None:
+            return
+        resp = await self.send_request(int(sdcp.Cmd.GET_HISTORY), None, timeout=5.0)
+        if not resp:
+            log.warning("centauri backfill: Cmd 320 timed out, skipping")
+            return
+        data = resp.get("Data", {}).get("Data", {}) if isinstance(resp, dict) else {}
+        task_ids = data.get("HistoryData") if isinstance(data, dict) else None
+        if not isinstance(task_ids, list) or not task_ids:
+            log.info("centauri backfill: no history returned by printer")
+            return
+        log.info(
+            "centauri backfill: %d task(s) in printer history, scanning up to %d",
+            len(task_ids),
+            HISTORY_BACKFILL_LIMIT,
+        )
+        new_count = 0
+        skipped_count = 0
+        printer_id = self._mainboard_id or "unknown"
+        for task_id in task_ids[:HISTORY_BACKFILL_LIMIT]:
+            if self._stop_requested or self._ws is None:
+                break
+            task_id_s = str(task_id)
+            try:
+                if self._exists_check(printer_id, task_id_s):
+                    skipped_count += 1
+                    continue
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "centauri backfill: exists_check failed for %s", task_id_s
+                )
+                continue
+            try:
+                ingested = await self._backfill_one(task_id_s)
+                if ingested:
+                    new_count += 1
+            except Exception:  # noqa: BLE001
+                log.exception("centauri backfill: task %s failed", task_id_s)
+        log.info(
+            "centauri backfill: done (new=%d, already-known=%d)",
+            new_count,
+            skipped_count,
+        )
+
+    async def _backfill_one(self, task_id: str) -> bool:
+        """Ingest one printer-side task UUID. Returns True on success.
+
+        Caller has already verified the task isn't in the DB. We hit
+        Cmd 321 once for the metadata and pass the detail dict through
+        to the enrichment task so it doesn't repeat the call.
+        """
+        resp = await self.send_request(
+            int(sdcp.Cmd.GET_HISTORY_TASK_DETAIL),
+            {"Id": [task_id]},
+            timeout=4.0,
+        )
+        if not resp:
+            return False
+        inner = resp.get("Data", {}).get("Data", {}) if isinstance(resp, dict) else {}
+        details = inner.get("HistoryDetailList") if isinstance(inner, dict) else None
+        if not isinstance(details, list) or not details:
+            return False
+        d = details[0]
+        if not isinstance(d, dict):
+            return False
+
+        task_status = d.get("TaskStatus")
+        error_reason = d.get("ErrorStatusReason")
+        outcome = sdcp.history_outcome(
+            int(task_status) if isinstance(task_status, (int, float)) else -1,
+            int(error_reason) if isinstance(error_reason, (int, float)) else None,
+        )
+        if outcome is None:
+            log.debug(
+                "centauri backfill: skipping task %s — unmapped TaskStatus=%r",
+                task_id,
+                task_status,
+            )
+            return False
+
+        task_name = d.get("TaskName")
+        begin = d.get("BeginTime")
+        end = d.get("EndTime")
+        dur_s = d.get("PrintDuration")
+        dur_min = None
+        if isinstance(dur_s, (int, float)) and dur_s > 0:
+            dur_min = int(dur_s / 60)
+        # Cmd 321 reports a single PrintDuration. Treat it as the
+        # actual run-length; the slicer's estimate comes from the
+        # gcode header during enrichment.
+        filename = (
+            str(task_name).rsplit("/", 1)[-1]
+            if isinstance(task_name, str)
+            else f"<unknown {task_id[:8]}>"
+        )
+        # Sanity-check timestamps. The printer occasionally returns
+        # pre-NTP values (small positive ints from before clock sync)
+        # for older history rows. The UI shows these as "--" in the
+        # printer's own list; we'd rather show the row at created-at
+        # time than render a 1970 date. Threshold = 2020-01-01.
+        SANE_EPOCH = 1_577_836_800
+        def _coerce_epoch(v: Any, fallback: int) -> int:
+            if isinstance(v, (int, float)) and int(v) >= SANE_EPOCH:
+                return int(v)
+            return fallback
+        now_s = int(time.time())
+        started_at = _coerce_epoch(begin, fallback=_coerce_epoch(end, now_s))
+        ended_at: int | None = _coerce_epoch(end, fallback=0) or None
+        event = {
+            "printerId": self._mainboard_id or "unknown",
+            "sdcpJobId": task_id,
+            "gcodeFilename": filename,
+            "startedAt": started_at,
+            "endedAt": ended_at,
+            "outcome": outcome,
+            "estTimeMin": None,
+            "actTimeMin": dur_min,
+            "estFilamentG": None,
+            "actFilamentG": None,
+            "plateCount": None,
+            "embeddedMeshCount": None,
+            "plateTransformsIdentity": None,
+            "thumbnailPath": None,
+            "archived3mfPath": None,
+            "rawPayload": json.dumps(d),
+        }
+        self._spawn_enrichment(event, task_id, prefetched_detail=d)
+        return True
+
+    async def _enrich_and_ingest(
+        self,
+        event: dict[str, Any],
+        task_id: str,
+        *,
+        prefetched_detail: dict[str, Any] | None = None,
+    ) -> None:
         """Best-effort enrichment path.
 
         Step 1: Cmd 321 → printer-side TaskName + MD5 + plate info.
+                Skipped when `prefetched_detail` is supplied (backfill
+                already paid for the round-trip).
         Step 2: HTTP GET the gcode by TaskName.
         Step 3: Parse OrcaSlicer header → filament weight, time,
                 input_filename_base.
@@ -591,29 +803,37 @@ class CentauriClient:
         whatever enrichment we managed (potentially none) — keeping the
         inbox correct is more important than the filament-weight badge.
         """
-        # Step 1 — Cmd 321
+        # Step 1 — Cmd 321 (skipped if caller already has the detail dict)
         task_name: str | None = None
         printer_md5: str | None = None
-        try:
-            resp = await self.send_request(
-                int(sdcp.Cmd.GET_HISTORY_TASK_DETAIL),
-                {"Id": [task_id]},
-                timeout=4.0,
-            )
-            if resp:
-                inner = resp.get("Data", {}).get("Data", {}) if isinstance(resp, dict) else {}
-                details = inner.get("HistoryDetailList") if isinstance(inner, dict) else None
-                if isinstance(details, list) and details:
-                    d = details[0]
-                    if isinstance(d, dict):
-                        tn = d.get("TaskName")
-                        if isinstance(tn, str):
-                            task_name = tn
-                        m = d.get("MD5")
-                        if isinstance(m, str):
-                            printer_md5 = m
-        except Exception:  # noqa: BLE001
-            log.exception("centauri: Cmd 321 failed for task %s", task_id)
+        if prefetched_detail is not None:
+            tn = prefetched_detail.get("TaskName")
+            if isinstance(tn, str):
+                task_name = tn
+            m = prefetched_detail.get("MD5")
+            if isinstance(m, str):
+                printer_md5 = m
+        else:
+            try:
+                resp = await self.send_request(
+                    int(sdcp.Cmd.GET_HISTORY_TASK_DETAIL),
+                    {"Id": [task_id]},
+                    timeout=4.0,
+                )
+                if resp:
+                    inner = resp.get("Data", {}).get("Data", {}) if isinstance(resp, dict) else {}
+                    details = inner.get("HistoryDetailList") if isinstance(inner, dict) else None
+                    if isinstance(details, list) and details:
+                        d = details[0]
+                        if isinstance(d, dict):
+                            tn = d.get("TaskName")
+                            if isinstance(tn, str):
+                                task_name = tn
+                            m = d.get("MD5")
+                            if isinstance(m, str):
+                                printer_md5 = m
+            except Exception:  # noqa: BLE001
+                log.exception("centauri: Cmd 321 failed for task %s", task_id)
 
         # Step 2 — HTTP fetch
         gcode_text: str | None = None

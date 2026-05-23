@@ -144,7 +144,18 @@ prints_routes.set_db_conn_factory(get_db_conn)
 _centauri_ingest = centauri_routes.make_ingest_callback()
 # Pass UPLOAD_DIR so the client can archive each finished print's gcode
 # under <upload>/centauri/<printer>/ for the matcher's later re-runs.
-_centauri_client = CentauriClient(_centauri_ingest, upload_dir=UPLOAD_DIR)
+# Pass an exists-check so the history backfill can dedup against the DB
+# before paying for Cmd 321 + HTTP fetch on already-known UUIDs.
+def _centauri_event_exists(printer_id: str, task_id: str) -> bool:
+    from custom_centauri import repo as _repo
+    return _repo.event_exists(get_db_conn, printer_id, task_id)
+
+
+_centauri_client = CentauriClient(
+    _centauri_ingest,
+    upload_dir=UPLOAD_DIR,
+    exists_check=_centauri_event_exists,
+)
 centauri_routes.configure(db_conn_factory=get_db_conn, client=_centauri_client)
 
 app.include_router(mw_auth_routes.router)

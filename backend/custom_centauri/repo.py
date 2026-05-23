@@ -153,6 +153,25 @@ def insert_event(db: DbFactory, event: dict[str, Any]) -> int | None:
         conn.close()
 
 
+def event_exists(db: DbFactory, printer_id: str, sdcp_job_id: str) -> bool:
+    """Fast existence probe used by the history backfill.
+
+    Cheaper than calling `insert_event` and catching the no-op — avoids
+    a write transaction. Hits the existing UNIQUE index, so it's a
+    single indexed lookup.
+    """
+    conn = db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM centauri_print_event "
+            "WHERE printerId = ? AND sdcpJobId = ? LIMIT 1",
+            (printer_id, sdcp_job_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
 def list_events(
     db: DbFactory,
     *,
