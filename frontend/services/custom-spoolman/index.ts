@@ -3,7 +3,9 @@
 
 import { resolveApiBase } from "../apiBase";
 
-const BASE = `${resolveApiBase()}/spoolman`;
+// Function call (not a module-level const) so a runtime change to the
+// `api-port-override` localStorage entry takes effect without a reload.
+const base = (): string => `${resolveApiBase()}/spoolman`;
 
 // ---- shapes ----
 
@@ -92,7 +94,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 
 export const spoolmanApi = {
   getSettings: async (): Promise<SpoolmanSettings> => {
-    return jsonOrThrow(await fetch(`${BASE}/settings`));
+    return jsonOrThrow(await fetch(`${base()}/settings`));
   },
 
   saveSettings: async (input: {
@@ -101,7 +103,7 @@ export const spoolmanApi = {
     enabled: boolean;
   }): Promise<SpoolmanSettings> => {
     return jsonOrThrow(
-      await fetch(`${BASE}/settings`, {
+      await fetch(`${base()}/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -114,7 +116,7 @@ export const spoolmanApi = {
     apiKey?: string | null;
   }): Promise<SpoolmanTestResult> => {
     return jsonOrThrow(
-      await fetch(`${BASE}/test`, {
+      await fetch(`${base()}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input ?? {}),
@@ -123,31 +125,31 @@ export const spoolmanApi = {
   },
 
   listSpools: async (): Promise<SpoolSummary[]> => {
-    return jsonOrThrow(await fetch(`${BASE}/spools`));
+    return jsonOrThrow(await fetch(`${base()}/spools`));
   },
 
   getSpool: async (id: number): Promise<unknown> => {
-    return jsonOrThrow(await fetch(`${BASE}/spools/${id}`));
+    return jsonOrThrow(await fetch(`${base()}/spools/${id}`));
   },
 
   parseSliceUpload: async (file: File): Promise<SliceParseResult> => {
     const fd = new FormData();
     fd.append("file", file);
     return jsonOrThrow(
-      await fetch(`${BASE}/parse-slice`, { method: "POST", body: fd }),
+      await fetch(`${base()}/parse-slice`, { method: "POST", body: fd }),
     );
   },
 
   parseSliceForModel: async (modelId: string): Promise<SliceParseResult> => {
     return jsonOrThrow(
       await fetch(
-        `${BASE}/parse-slice?modelId=${encodeURIComponent(modelId)}`,
+        `${base()}/parse-slice?modelId=${encodeURIComponent(modelId)}`,
         { method: "POST" },
       ),
     );
   },
 
   reconciliation: async (): Promise<ReconciliationReport> => {
-    return jsonOrThrow(await fetch(`${BASE}/reconciliation`));
+    return jsonOrThrow(await fetch(`${base()}/reconciliation`));
   },
 };

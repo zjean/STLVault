@@ -23,11 +23,7 @@ export interface LikedListResponse {
   hiddenCnt: number;
 }
 
-const apiBase = (): string => {
-  const override = localStorage.getItem("api-port-override");
-  if (override) return override + "/api";
-  return import.meta.env.VITE_API_URL + "/api";
-};
+import { resolveApiBase } from "../apiBase";
 
 export class MakerworldAuthExpiredError extends Error {
   constructor() {
@@ -46,7 +42,7 @@ const isAuthExpired = (data: unknown): boolean => {
 export const makerworldApi = {
   async listLiked(limit = 24, offset = 0): Promise<LikedListResponse> {
     const res = await fetch(
-      `${apiBase()}/makerworld/liked?limit=${limit}&offset=${offset}`,
+      `${resolveApiBase()}/makerworld/liked?limit=${limit}&offset=${offset}`,
     );
     if (res.status === 401) {
       const data = await res.json().catch(() => null);
@@ -63,7 +59,7 @@ export const makerworldApi = {
   },
 
   async retrieveModelOptions(url: string): Promise<STLModelCollection[]> {
-    const res = await fetch(`${apiBase()}/makerworld/options`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/options`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
@@ -86,7 +82,7 @@ export const makerworldApi = {
     typeName: string,
     sourceUrl?: string,
   ): Promise<STLModel> {
-    const res = await fetch(`${apiBase()}/makerworld/importid`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/importid`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, name, parentId, previewPath, folderId, typeName, sourceUrl }),

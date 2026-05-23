@@ -1,14 +1,6 @@
 // Fork-only: typed client for the STLVault prints API.
 
-let API_BASE_URL = "";
-const override = localStorage.getItem("api-port-override");
-if (override) {
-  API_BASE_URL = override + "/api";
-} else if (import.meta.env.VITE_API_URL === "TERA_API_URL") {
-  API_BASE_URL = "/api";
-} else {
-  API_BASE_URL = import.meta.env.VITE_API_URL + "/api";
-}
+import { resolveApiBase } from "../apiBase";
 
 export type PrintStatus = "printing" | "completed" | "failed" | "cancelled";
 
@@ -107,14 +99,14 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 
 export const printsApi = {
   listForModel: async (modelId: string): Promise<Print[]> =>
-    jsonOrThrow(await fetch(`${API_BASE_URL}/models/${modelId}/prints`)),
+    jsonOrThrow(await fetch(`${resolveApiBase()}/models/${modelId}/prints`)),
 
   createForModel: async (
     modelId: string,
     body: CreatePrintInput,
   ): Promise<{ print: Print; sync: SyncResult }> =>
     jsonOrThrow(
-      await fetch(`${API_BASE_URL}/models/${modelId}/prints`, {
+      await fetch(`${resolveApiBase()}/models/${modelId}/prints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -126,7 +118,7 @@ export const printsApi = {
     body: CompletePrintInput,
   ): Promise<{ print: Print; sync: SyncResult }> =>
     jsonOrThrow(
-      await fetch(`${API_BASE_URL}/prints/${printId}/complete`, {
+      await fetch(`${resolveApiBase()}/prints/${printId}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -137,14 +129,14 @@ export const printsApi = {
     printId: string,
   ): Promise<{ print: Print; sync: SyncResult }> =>
     jsonOrThrow(
-      await fetch(`${API_BASE_URL}/prints/${printId}/resync`, {
+      await fetch(`${resolveApiBase()}/prints/${printId}/resync`, {
         method: "POST",
       }),
     ),
 
   delete: async (printId: string): Promise<{ ok: boolean; wasSynced: boolean }> =>
     jsonOrThrow(
-      await fetch(`${API_BASE_URL}/prints/${printId}`, { method: "DELETE" }),
+      await fetch(`${resolveApiBase()}/prints/${printId}`, { method: "DELETE" }),
     ),
 
   listAll: async (params?: {
@@ -164,7 +156,7 @@ export const printsApi = {
     if (params?.modelId) qs.set("modelId", params.modelId);
     if (params?.sinceMs != null) qs.set("sinceMs", String(params.sinceMs));
     if (params?.untilMs != null) qs.set("untilMs", String(params.untilMs));
-    const url = `${API_BASE_URL}/prints${qs.toString() ? `?${qs}` : ""}`;
+    const url = `${resolveApiBase()}/prints${qs.toString() ? `?${qs}` : ""}`;
     return jsonOrThrow(await fetch(url));
   },
 
@@ -176,7 +168,7 @@ export const printsApi = {
     const qs = new URLSearchParams({ sinceMs: String(sinceMs) });
     if (untilMs != null) qs.set("untilMs", String(untilMs));
     return jsonOrThrow(
-      await fetch(`${API_BASE_URL}/prints/stats/rollup?${qs.toString()}`),
+      await fetch(`${resolveApiBase()}/prints/stats/rollup?${qs.toString()}`),
     );
   },
 };

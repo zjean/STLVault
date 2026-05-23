@@ -5,11 +5,7 @@
 // custom-bambu/, not custom-importers/. When V2 grows another
 // Bambu-API feature (printer monitoring, etc.) it shares this module.
 
-const apiBase = (): string => {
-  const override = localStorage.getItem("api-port-override");
-  if (override) return override + "/api";
-  return import.meta.env.VITE_API_URL + "/api";
-};
+import { resolveApiBase } from "../apiBase";
 
 export interface BambuAuthStatus {
   signedIn: boolean;
@@ -53,7 +49,7 @@ async function extractError(res: Response): Promise<string> {
 
 export const bambuAuth = {
   async sendCode(email: string): Promise<void> {
-    const res = await fetch(`${apiBase()}/makerworld/auth/send-code`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/auth/send-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -62,7 +58,7 @@ export const bambuAuth = {
   },
 
   async login(email: string, code: string): Promise<BambuLoginResult> {
-    const res = await fetch(`${apiBase()}/makerworld/auth/login`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, code }),
@@ -72,20 +68,20 @@ export const bambuAuth = {
   },
 
   async getStatus(): Promise<BambuAuthStatus> {
-    const res = await fetch(`${apiBase()}/makerworld/auth/status`);
+    const res = await fetch(`${resolveApiBase()}/makerworld/auth/status`);
     if (!res.ok) throw new BambuAuthApiError(res.status, await extractError(res));
     return res.json();
   },
 
   async signOut(): Promise<void> {
-    const res = await fetch(`${apiBase()}/makerworld/auth/sign-out`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/auth/sign-out`, {
       method: "POST",
     });
     if (!res.ok) throw new BambuAuthApiError(res.status, await extractError(res));
   },
 
   async pasteToken(input: PasteTokenInput): Promise<BambuLoginResult> {
-    const res = await fetch(`${apiBase()}/makerworld/auth/paste-token`, {
+    const res = await fetch(`${resolveApiBase()}/makerworld/auth/paste-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
