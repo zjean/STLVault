@@ -78,6 +78,35 @@ def terminal_outcome(status: int) -> str | None:
     return None
 
 
+# Cmd 321 HISTORY_TASK_DETAIL response carries a `TaskStatus` int. The
+# values overlap with but don't equal `PrintStatus`. Observed against
+# real firmware:
+#   3  → "Complete"  (the UI's green checkmark)
+# Other values land in the printer's web UI as "Cancel" or remain
+# unobserved. Treat 3 as completed; combine with `ErrorStatusReason`
+# (also returned by Cmd 321) to disambiguate the failed case. Anything
+# we can't classify is None — the backfill loop skips those entries so
+# we don't pollute the inbox with rows of dubious outcome until we have
+# evidence of what the codes mean.
+TASK_STATUS_COMPLETE = 3
+
+
+def history_outcome(task_status: int, error_reason: int | None = None) -> str | None:
+    """Classify a Cmd 321 history entry's TaskStatus into our outcome enum.
+
+    Returns 'completed' / 'failed', or None for unmappable rows. The
+    'cancelled' bucket is intentionally empty until we observe a real
+    cancelled-job's TaskStatus value — the printer's web UI does label
+    some jobs as "Cancel" so the code exists somewhere, but we don't
+    want to mislabel rows on a guess.
+    """
+    if task_status == TASK_STATUS_COMPLETE:
+        if error_reason and int(error_reason) != 0:
+            return "failed"
+        return "completed"
+    return None
+
+
 DEFAULT_PUSH_PERIOD_MS = 5000
 
 
