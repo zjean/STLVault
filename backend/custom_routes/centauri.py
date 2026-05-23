@@ -97,9 +97,7 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
         # Run the matcher synchronously so the inbox never shows a fresh
         # event with zero candidates.
         try:
-            n = matcher.run_all_signals(
-                _db_conn_factory, row_id, event.get("gcodeFilename", "")
-            )
+            n = matcher.run_all_signals(_db_conn_factory, row_id, event)
             log.info("centauri matcher: event %s — %d candidate(s)", row_id, n)
         except Exception:  # noqa: BLE001
             log.exception("centauri matcher: failed (event=%s)", row_id)

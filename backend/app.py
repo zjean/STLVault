@@ -142,7 +142,9 @@ prints_routes.set_db_conn_factory(get_db_conn)
 # ingestion callback can write into the SQLite + publish on the SSE bus
 # before the WS task starts at startup.
 _centauri_ingest = centauri_routes.make_ingest_callback()
-_centauri_client = CentauriClient(_centauri_ingest)
+# Pass UPLOAD_DIR so the client can archive each finished print's gcode
+# under <upload>/centauri/<printer>/ for the matcher's later re-runs.
+_centauri_client = CentauriClient(_centauri_ingest, upload_dir=UPLOAD_DIR)
 centauri_routes.configure(db_conn_factory=get_db_conn, client=_centauri_client)
 
 app.include_router(mw_auth_routes.router)

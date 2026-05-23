@@ -12,6 +12,32 @@ from __future__ import annotations
 import sqlite3
 
 
+_ENRICHMENT_COLUMNS = (
+    # Phase-2.2 — per-event gcode enrichment via SDCP Cmd 321 + HTTP
+    # fetch of the sliced .gcode the printer keeps under /local/.
+    ("archivedGcodePath", "TEXT"),
+    ("gcodeMd5", "TEXT"),
+    ("taskName", "TEXT"),
+    ("inputFilenameBase", "TEXT"),
+)
+
+
+def _add_enrichment_columns(conn: sqlite3.Connection) -> None:
+    """Forward-migrate the print-event table to carry gcode enrichment.
+
+    Idempotent. Mirrors the pattern in custom_prints/schema.py — new
+    nullable columns are safe to append without rewriting historic rows.
+    """
+    cur = conn.cursor()
+    existing = {row[1] for row in cur.execute("PRAGMA table_info(centauri_print_event)")}
+    for name, sqltype in _ENRICHMENT_COLUMNS:
+        if name not in existing:
+            cur.execute(
+                f"ALTER TABLE centauri_print_event ADD COLUMN {name} {sqltype}"
+            )
+    conn.commit()
+
+
 def ensure_centauri_tables(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
 
@@ -121,3 +147,7 @@ def ensure_centauri_tables(conn: sqlite3.Connection) -> None:
     # Seed the singleton settings row.
     cur.execute("INSERT OR IGNORE INTO centauri_settings (id) VALUES (1)")
     conn.commit()
+
+    # Phase-2.2 enrichment columns. Lives in its own function so the
+    # migration is greppable when we add the next wave of fields.
+    _add_enrichment_columns(conn)

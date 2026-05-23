@@ -39,6 +39,11 @@ class Cmd(IntEnum):
     GET_PRINTER_ATTRIBUTES = 1
     LIST_FILES = 258
     GET_HISTORY = 320
+    # Per-task history detail — returns TaskName (gcode path on the
+    # printer), MD5, BeginTime/EndTime, PrintDuration, slice info, and
+    # the same thumbnail URL the /events thumbnail proxy uses. Request
+    # payload: {"Id": ["<task-uuid>"]} — accepts multiple IDs.
+    GET_HISTORY_TASK_DETAIL = 321
     SUBSCRIBE = 512
 
 

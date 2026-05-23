@@ -39,6 +39,13 @@ export interface PrintEvent {
   plateTransformsIdentity: boolean | null;
   thumbnailPath: string | null;
   archived3mfPath: string | null;
+  // Phase-2.2 enrichment fields — populated when the printer's gcode
+  // was fetched + parsed after the terminal-state transition. All
+  // nullable; old events never had these computed.
+  archivedGcodePath?: string | null;
+  gcodeMd5?: string | null;
+  taskName?: string | null;
+  inputFilenameBase?: string | null;
   rawPayloadParsed: Record<string, unknown> | null;
   createdAt: number;
 }
@@ -56,7 +63,11 @@ export interface MatchCandidate {
   id: number;
   eventId: number;
   modelId: string;
-  signal: "filename" | "source_hash" | "recent_slicer_open";
+  signal:
+    | "filename"
+    | "printer_filename"
+    | "source_hash"
+    | "recent_slicer_open";
   confidence: number;
   reason: string | null;
   modelName: string | null;
