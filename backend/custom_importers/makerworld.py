@@ -25,6 +25,32 @@ class MakerworldUrlError(ValueError):
     """The pasted URL doesn't look like a Makerworld model page."""
 
 
+class BambuApiError(Exception):
+    """Bambu/Makerworld upstream HTTP failure that isn't an auth problem.
+
+    Mirrors the shape of `SpoolmanError` so routes can map all external
+    HTTP failures to a single 502 instead of leaking raw
+    `requests.HTTPError` / `RequestException` as a 500. `status` may be
+    None for non-HTTP failures (timeout, connection refused).
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def _raise_bambu(r: requests.Response, what: str) -> None:
+    """Wrap response.raise_for_status() to produce a BambuApiError."""
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as e:
+        raise BambuApiError(
+            f"{what}: Bambu returned HTTP {r.status_code}",
+            status=r.status_code,
+        ) from e
+
+
 @dataclass(frozen=True)
 class DownloadedFile:
     content: bytes
@@ -136,8 +162,11 @@ class MakerworldImporter:
     def _get_design(self, design_id: int) -> dict:
         assert self.session is not None
         url = f"{BAMBU_API_BASE}/v1/design-service/design/{design_id}"
-        r = self.session.get(url, timeout=_REQUEST_TIMEOUT)
-        r.raise_for_status()
+        try:
+            r = self.session.get(url, timeout=_REQUEST_TIMEOUT)
+        except requests.RequestException as e:
+            raise BambuApiError(f"design {design_id}: {e}") from e
+        _raise_bambu(r, f"design {design_id}")
         data = r.json()
         # Bambu's API returns 200 with id=0 for unknown designs in some
         # ranges (e.g. designs that exist on the public URL but not via the
@@ -151,8 +180,11 @@ class MakerworldImporter:
     def _get_instances(self, design_id: int) -> List[dict]:
         assert self.session is not None
         url = f"{BAMBU_API_BASE}/v1/design-service/design/{design_id}/instances"
-        r = self.session.get(url, timeout=_REQUEST_TIMEOUT)
-        r.raise_for_status()
+        try:
+            r = self.session.get(url, timeout=_REQUEST_TIMEOUT)
+        except requests.RequestException as e:
+            raise BambuApiError(f"instances {design_id}: {e}") from e
+        _raise_bambu(r, f"instances {design_id}")
         data = r.json()
         hits = data.get("hits") or []
         if not hits:
@@ -176,17 +208,20 @@ class MakerworldImporter:
             f"?limit={limit}&offset={offset}"
         )
         with requests.Session() as s:
-            r = s.get(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=_REQUEST_TIMEOUT,
-            )
+            try:
+                r = s.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=_REQUEST_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                raise BambuApiError(f"/my/design/like: {e}") from e
             if r.status_code == 401:
                 log.info("makerworld: /my/design/like 401 — token rejected")
                 raise BambuAuthExpiredError(
                     "Bambu Cloud rejected the access token; user must sign in again"
                 )
-            r.raise_for_status()
+            _raise_bambu(r, "/my/design/like")
             data = r.json()
         hits = [_parse_liked(h) for h in (data.get("hits") or [])]
         return (
@@ -246,11 +281,14 @@ class MakerworldImporter:
             f"{BAMBU_API_BASE}/v1/iot-service/api/user/profile/{profile_id}"
             f"?model_id={model_id}"
         )
-        r = self.session.get(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=_REQUEST_TIMEOUT,
-        )
+        try:
+            r = self.session.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            raise BambuApiError(f"profile {profile_id}: {e}") from e
         if r.status_code == 401:
             log.info(
                 "makerworld: profile endpoint returned 401 (token revoked mid-flight?)"
@@ -258,7 +296,7 @@ class MakerworldImporter:
             raise BambuAuthExpiredError(
                 "Bambu Cloud rejected the access token; user must sign in again"
             )
-        r.raise_for_status()
+        _raise_bambu(r, f"profile {profile_id}")
         data = r.json()
         presigned = data.get("url")
         if not presigned:
@@ -271,18 +309,22 @@ class MakerworldImporter:
         """Fetch the presigned S3 URL exactly as given — no redirect-follow,
         no query-string re-encoding (signatures break on either)."""
         assert self.session is not None
-        r = self.session.get(
-            presigned_url,
-            allow_redirects=False,
-            timeout=_DOWNLOAD_TIMEOUT,
-            stream=True,
-        )
-        if 300 <= r.status_code < 400:
-            raise RuntimeError(
-                f"Unexpected redirect from S3 presigned URL (HTTP {r.status_code}); "
-                "signature may be invalid or Bambu changed their flow"
+        try:
+            r = self.session.get(
+                presigned_url,
+                allow_redirects=False,
+                timeout=_DOWNLOAD_TIMEOUT,
+                stream=True,
             )
-        r.raise_for_status()
+        except requests.RequestException as e:
+            raise BambuApiError(f"S3 download: {e}") from e
+        if 300 <= r.status_code < 400:
+            raise BambuApiError(
+                f"Unexpected redirect from S3 presigned URL (HTTP {r.status_code}); "
+                "signature may be invalid or Bambu changed their flow",
+                status=r.status_code,
+            )
+        _raise_bambu(r, "S3 download")
         return r.content
 
     def _make_thumbnail(self, url: str) -> str:

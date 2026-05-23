@@ -239,16 +239,25 @@ def _hydrate_filaments(
     conn: sqlite3.Connection, print_rows: List[sqlite3.Row]
 ) -> List[Dict[str, Any]]:
     print_ids = [r["id"] for r in print_rows]
-    placeholders = ",".join(["?"] * len(print_ids))
-    cur = conn.cursor()
-    fil_rows = cur.execute(
-        f"SELECT * FROM custom_print_filaments WHERE printId IN ({placeholders}) "
-        "ORDER BY id ASC",
-        print_ids,
-    ).fetchall()
+    # Chunk to stay under the SQLITE_MAX_VARIABLE_NUMBER ceiling. Older
+    # SQLite builds (pre-3.32, shipped with Debian stable for years) cap
+    # at 999 placeholders per statement; newer builds at 32766. The
+    # route's hard limit is 500 today, so this is defence-in-depth — a
+    # future "show last 2000 prints" tweak doesn't silently break on an
+    # older sqlite.
+    BATCH = 500
     by_print: Dict[str, List[Dict[str, Any]]] = {pid: [] for pid in print_ids}
-    for f in fil_rows:
-        by_print[f["printId"]].append(_row_to_filament(f))
+    cur = conn.cursor()
+    for start in range(0, len(print_ids), BATCH):
+        chunk = print_ids[start : start + BATCH]
+        placeholders = ",".join(["?"] * len(chunk))
+        fil_rows = cur.execute(
+            f"SELECT * FROM custom_print_filaments WHERE printId IN ({placeholders}) "
+            "ORDER BY id ASC",
+            chunk,
+        ).fetchall()
+        for f in fil_rows:
+            by_print[f["printId"]].append(_row_to_filament(f))
     return [_row_to_print(p, by_print[p["id"]]) for p in print_rows]
 
 
@@ -315,6 +324,13 @@ def update_filament_used_by_id(
     return cur.rowcount
 
 
+class AmbiguousFilamentError(ValueError):
+    """Raised when update_filament_used_by_spool would silently pick one
+    of several matching legs. Caller (the route) should map to 400 so
+    the client gets a clear "send filamentRowId" message back.
+    """
+
+
 def update_filament_used_by_spool(
     conn: sqlite3.Connection,
     print_id: str,
@@ -323,15 +339,28 @@ def update_filament_used_by_spool(
     used_weight_g: Optional[float],
     used_length_mm: Optional[float],
 ) -> None:
-    """Set used* on the first filament row matching (printId, spoolId).
+    """Set used* on the filament row matching (printId, spoolId).
 
     Fallback used only when the client didn't supply a filament row id.
-    Picks the lowest-id row when multiple match — fine when the UI is
-    single-filament-per-print, ambiguous under multi-spool. New clients
-    should send filamentRowId and route through
+    If more than one row matches (multi-leg same-spool print), raises
+    :class:`AmbiguousFilamentError` — a silent lowest-id pick would
+    update a different leg than the user meant. New clients should send
+    filamentRowId and route through
     :func:`update_filament_used_by_id` instead.
     """
     cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT COUNT(*) AS n FROM custom_print_filaments
+        WHERE printId = ? AND spoolId = ?
+        """,
+        (print_id, spool_id),
+    ).fetchone()
+    if row and row["n"] > 1:
+        raise AmbiguousFilamentError(
+            f"Print {print_id} has {row['n']} legs against spool {spool_id}; "
+            f"caller must send filamentRowId to disambiguate."
+        )
     cur.execute(
         """
         UPDATE custom_print_filaments
@@ -339,7 +368,7 @@ def update_filament_used_by_spool(
         WHERE id = (
             SELECT id FROM custom_print_filaments
             WHERE printId = ? AND spoolId = ?
-            ORDER BY id ASC LIMIT 1
+            LIMIT 1
         )
         """,
         (used_weight_g, used_length_mm, print_id, spool_id),
@@ -463,26 +492,30 @@ def rollup_window(
     if until_ms is not None:
         where += " AND COALESCE(p.completedAt, p.startedAt, p.createdAt) < ?"
         params.append(until_ms)
-    # Subquery on p makes each print contribute once to total_minutes
-    # regardless of how many filament rows it has.
+    # CTE so the window-filter is defined once and the three roll-ups
+    # share one set of bind params — replaces the older `params * 3`
+    # triplication that broke silently if someone added a fourth
+    # subquery without updating the multiplier.
     row = cur.execute(
         f"""
+        WITH window_prints AS (
+            SELECT id, wallClockMin, estDurationMin
+            FROM custom_prints p
+            WHERE p.status = 'completed' AND {where}
+        )
         SELECT
-            (SELECT COUNT(*) FROM custom_prints p
-             WHERE p.status = 'completed' AND {where})            AS count,
+            (SELECT COUNT(*) FROM window_prints)                       AS count,
             COALESCE((
-                SELECT SUM(COALESCE(p.wallClockMin, p.estDurationMin, 0))
-                FROM custom_prints p
-                WHERE p.status = 'completed' AND {where}
-            ), 0)                                                 AS total_minutes,
+                SELECT SUM(COALESCE(wallClockMin, estDurationMin, 0))
+                FROM window_prints
+            ), 0)                                                      AS total_minutes,
             COALESCE((
                 SELECT SUM(COALESCE(f.usedWeightG, f.estWeightG, 0))
                 FROM custom_print_filaments f
-                JOIN custom_prints p ON p.id = f.printId
-                WHERE p.status = 'completed' AND {where}
-            ), 0)                                                 AS total_weight_g
+                JOIN window_prints wp ON wp.id = f.printId
+            ), 0)                                                      AS total_weight_g
         """,
-        params * 3,
+        params,
     ).fetchone()
     return {
         "count": int(row["count"] or 0),
