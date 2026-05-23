@@ -399,26 +399,32 @@ def list_recent_reserves(db: DbFactory, since_days: int = 30) -> list[dict[str, 
 # ---------------------------------------------------------------------- auto-confirm
 
 
-def get_auto_confirm_candidate(db: DbFactory, event_id: int) -> str | None:
-    """Return the model_id that should auto-confirm, or None.
+_HIGH_CONFIDENCE_SIGNALS = ("printer_filename", "source_hash")
+
+
+def get_auto_confirm_candidate(db: DbFactory, event_id: int) -> tuple[str, str] | None:
+    """Return (model_id, anchor_signal) that should auto-confirm, or None.
 
     Eligible when:
-      - `printer_filename` signal fired (the slicer-template-extracted
-        input_filename_base matched a model name), AND
-      - all candidate rows across every signal that fired point to the
-        same single model_id (i.e. nothing disagrees).
+      - at least one high-confidence signal fired:
+          * `printer_filename` — slicer-template-extracted name match, OR
+          * `source_hash` — embedded mesh MD5 matches a model's hash row
+            (Phase-4; needs `.gcode.3mf` attached to this event), AND
+      - all candidate rows across every signal point to the same single
+        model_id (nothing disagrees).
 
     The basic `filename` signal can't fire on Centauri-side filenames
     in practice — the printer stores prefix-heavy `.gcode`
     (`ECC_0.4_<name>_PLA0.12_4h25m.gcode`) which the simple stem
-    normaliser doesn't decode. So we anchor the gate on
-    `printer_filename` (which DOES decode the slicer's template) and
-    treat any other signal as confirmatory rather than required. If
-    another signal disagrees on the model_id, fall through to the
-    inbox.
+    normaliser doesn't decode. So we anchor the gate on the two
+    higher-confidence signals and treat any other signal (including
+    `filename`) as confirmatory rather than required.
 
     Multi-hit candidates write multiple rows with different model_ids,
     so the "len(model_ids) == 1" check rejects them.
+
+    Returns the anchor signal alongside the model id so the caller can
+    write a meaningful audit reason on the review row.
     """
     conn = db()
     try:
@@ -430,12 +436,16 @@ def get_auto_confirm_candidate(db: DbFactory, event_id: int) -> str | None:
         conn.close()
     if not rows:
         return None
-    if not any(r["signal"] == "printer_filename" for r in rows):
+    anchor = next(
+        (r["signal"] for r in rows if r["signal"] in _HIGH_CONFIDENCE_SIGNALS),
+        None,
+    )
+    if anchor is None:
         return None
     model_ids = {r["modelId"] for r in rows}
     if len(model_ids) != 1:
         return None
-    return next(iter(model_ids))
+    return next(iter(model_ids)), anchor
 
 
 def list_recent_auto_matched(

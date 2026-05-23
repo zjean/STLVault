@@ -102,71 +102,92 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
         except Exception:  # noqa: BLE001
             log.exception("centauri matcher: failed (event=%s)", row_id)
 
-        # Phase-3 auto-confirm gate. Fires when:
-        #   - autoConfirmEnabled toggle is on (default), AND
-        #   - both `filename` and `printer_filename` signals fired, AND
-        #   - they agree on a single model_id.
-        # Anything ambiguous (multi-hit, signals disagreeing, only one
-        # signal firing) falls through to the inbox. Spool-resolution
-        # is deferred to Phase 3b — auto-matched prints land with
-        # syncedToSpoolman=0 and rely on the existing Spoolman retry
-        # surface, same as manual confirms today.
-        try:
-            settings = repo.get_settings(_db_conn_factory)
-            if settings.get("autoConfirmEnabled"):
-                target_model_id = repo.get_auto_confirm_candidate(
-                    _db_conn_factory, row_id
-                )
-                if target_model_id:
-                    # Verify the model still exists — soft FK so possible
-                    # for the matcher's cached candidate row to outlive
-                    # the model.
-                    conn = _db_conn_factory()
-                    try:
-                        exists = conn.execute(
-                            "SELECT 1 FROM models WHERE id = ?",
-                            (target_model_id,),
-                        ).fetchone()
-                    finally:
-                        conn.close()
-                    if exists:
-                        ev_row = repo.get_event(_db_conn_factory, row_id)
-                        if ev_row is not None:
-                            print_id = repo.create_print_log_from_event(
-                                _db_conn_factory, ev_row, target_model_id
-                            )
-                            repo.upsert_review(
-                                _db_conn_factory,
-                                row_id,
-                                action="auto",
-                                reason="printer_filename single-hit; no signal disagreed",
-                                resulting_print_id=print_id,
-                                resulting_model_id=target_model_id,
-                            )
-                            log.info(
-                                "centauri ingest: auto-confirmed event %s "
-                                "against model %s (print %s)",
-                                row_id,
-                                target_model_id,
-                                print_id,
-                            )
-                            _publish(
-                                {
-                                    "type": "event.auto",
-                                    "eventId": row_id,
-                                    "modelId": target_model_id,
-                                    "printId": print_id,
-                                }
-                            )
-                            return
-        except Exception:  # noqa: BLE001
-            log.exception(
-                "centauri ingest: auto-confirm gate failed (event=%s)", row_id
-            )
+        # Auto-confirm gate — Phase-3 anchored on printer_filename,
+        # Phase-4 extended to also accept source_hash as anchor.
+        if _try_auto_confirm(row_id):
+            return
 
         _publish({"type": "event.new", "eventId": row_id})
 
     return _ingest
+
+
+def _try_auto_confirm(event_id: int) -> bool:
+    """Run the auto-confirm gate against an event. Returns True if it fired.
+
+    Used by both the live-ingest callback and the Phase-4 attach-3mf path
+    (where source_hash may newly satisfy the gate after the user supplies
+    a `.gcode.3mf`). Side effects on success: writes a print log + review
+    row, publishes `event.auto`.
+
+    Eligible when:
+      - `autoConfirmEnabled` is on, AND
+      - the gate (see `repo.get_auto_confirm_candidate`) returns a
+        unique model_id anchored on `printer_filename` OR `source_hash`,
+        AND
+      - the model still exists.
+
+    Spool-resolution stays deferred — auto-matched prints land with
+    syncedToSpoolman=0 and rely on the existing manual retry surface.
+    """
+    if _db_conn_factory is None:
+        return False
+    try:
+        settings = repo.get_settings(_db_conn_factory)
+        if not settings.get("autoConfirmEnabled"):
+            return False
+        result = repo.get_auto_confirm_candidate(_db_conn_factory, event_id)
+        if result is None:
+            return False
+        target_model_id, anchor = result
+        # Verify the model still exists — soft FK so possible for the
+        # matcher's cached candidate row to outlive the model.
+        conn = _db_conn_factory()
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM models WHERE id = ?", (target_model_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if not exists:
+            return False
+        ev_row = repo.get_event(_db_conn_factory, event_id)
+        if ev_row is None:
+            return False
+        print_id = repo.create_print_log_from_event(
+            _db_conn_factory, ev_row, target_model_id
+        )
+        repo.upsert_review(
+            _db_conn_factory,
+            event_id,
+            action="auto",
+            reason=f"{anchor} single-hit; no signal disagreed",
+            resulting_print_id=print_id,
+            resulting_model_id=target_model_id,
+        )
+        log.info(
+            "centauri: auto-confirmed event %s against model %s "
+            "(print %s, anchor=%s)",
+            event_id,
+            target_model_id,
+            print_id,
+            anchor,
+        )
+        _publish(
+            {
+                "type": "event.auto",
+                "eventId": event_id,
+                "modelId": target_model_id,
+                "printId": print_id,
+                "anchor": anchor,
+            }
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "centauri: auto-confirm gate failed (event=%s)", event_id
+        )
+        return False
 
 
 # --- models -----------------------------------------------------------------
@@ -439,7 +460,16 @@ async def attach_3mf(event_id: int, file: UploadFile = File(...)):
     fresh_event = repo.get_event(_db, event_id) or ev
     matcher.run_all_signals(_db, event_id, fresh_event)
 
-    _publish({"type": "event.reviewed", "eventId": event_id, "action": "attached-3mf"})
+    # Source_hash may now satisfy the auto-confirm gate. Skip if the
+    # event is already auto-confirmed (re-attaching shouldn't second-
+    # guess the existing decision) or terminally reviewed.
+    auto_confirmed = False
+    existing_review = repo.get_review(_db, event_id)
+    if existing_review is None or existing_review["action"] == "reserve":
+        auto_confirmed = _try_auto_confirm(event_id)
+
+    if not auto_confirmed:
+        _publish({"type": "event.reviewed", "eventId": event_id, "action": "attached-3mf"})
 
     return {
         "eventId": event_id,
@@ -449,6 +479,7 @@ async def attach_3mf(event_id: int, file: UploadFile = File(...)):
         "embeddedMeshCount": meta.embedded_mesh_count,
         "transformsIdentity": meta.transforms_identity,
         "meshCount": mesh_count,
+        "autoConfirmed": auto_confirmed,
     }
 
 
