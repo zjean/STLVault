@@ -21,11 +21,11 @@ import time
 from typing import Any, Callable
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from custom_centauri import matcher, repo
+from custom_centauri import gcode3mf_meta, matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
 
@@ -358,6 +358,280 @@ def list_recent_auto(hours: int = 168) -> list[dict[str, Any]]:
         ev["candidates"] = matcher.list_candidates(_db, ev["id"])
         ev["review"] = repo.get_review(_db, ev["id"])
     return events
+
+
+_MAX_GCODE3MF_BYTES = 256 * 1024 * 1024  # 256 MB: tens of MB are typical
+
+
+@router.post("/events/{event_id}/attach-3mf")
+async def attach_3mf(event_id: int, file: UploadFile = File(...)):
+    """Accept the slicer's `.gcode.3mf` and re-run matching with it.
+
+    Persists the archive under `${FILE_STORAGE}/centauri/<printer>/3mf/`,
+    extracts every mesh-like inner file's MD5 into `centauri_event_mesh`,
+    fills the plate / mesh / transforms metadata onto the event row, then
+    re-runs the matcher so the source-hash signal lights up. Publishes
+    SSE `event.reviewed` (close-enough channel — the inbox just refreshes
+    on any of new/reviewed/auto/updated) so the card re-renders without
+    a poll.
+    """
+    import os
+    from pathlib import Path
+
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    # Read the upload up-front. UploadFile streams from a SpooledTemporaryFile;
+    # we want a single byte blob for parser + hash + persistence.
+    blob = await file.read(_MAX_GCODE3MF_BYTES + 1)
+    if len(blob) > _MAX_GCODE3MF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (limit {_MAX_GCODE3MF_BYTES} bytes)",
+        )
+    if not blob:
+        raise HTTPException(status_code=400, detail="empty upload")
+
+    meta = gcode3mf_meta.parse(blob)
+    if meta.is_empty():
+        # We accept the archive even when the parser came up empty — the
+        # user did attach SOMETHING, and a future create-from-print can
+        # still serve the file back. Just log loudly.
+        log.info(
+            "centauri attach-3mf: parser found no plates/meshes for event %s",
+            event_id,
+        )
+
+    # Persist under the same per-printer tree as Phase-2.2's gcode archive.
+    upload_root = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    dest_dir = upload_root / "centauri" / str(ev["printerId"]) / "3mf"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    leaf = f"{ev['startedAt']}_{str(ev['sdcpJobId'])[:12]}.gcode.3mf"
+    archived_path = dest_dir / leaf
+    archived_path.write_bytes(blob)
+
+    repo.set_event_archived_3mf(
+        _db,
+        event_id,
+        archived_path=str(archived_path),
+        plate_count=meta.plate_count if meta.plate_count else None,
+        embedded_mesh_count=meta.embedded_mesh_count if meta.embedded_mesh_count else None,
+        transforms_identity=(
+            None
+            if meta.transforms_identity is None
+            else int(meta.transforms_identity)
+        ),
+    )
+
+    mesh_count = repo.replace_event_meshes(
+        _db,
+        event_id,
+        [
+            {"zipPath": m.zip_path, "md5": m.md5, "sizeBytes": m.size}
+            for m in meta.meshes
+        ],
+    )
+
+    # Re-run the matcher with the freshly-attached mesh data. We pass the
+    # updated event dict so the source_hash signal can read the meshes
+    # back via the repo (rather than threading them through the call).
+    fresh_event = repo.get_event(_db, event_id) or ev
+    matcher.run_all_signals(_db, event_id, fresh_event)
+
+    _publish({"type": "event.reviewed", "eventId": event_id, "action": "attached-3mf"})
+
+    return {
+        "eventId": event_id,
+        "archivedPath": str(archived_path),
+        "wholeFileMd5": meta.whole_file_md5,
+        "plateCount": meta.plate_count,
+        "embeddedMeshCount": meta.embedded_mesh_count,
+        "transformsIdentity": meta.transforms_identity,
+        "meshCount": mesh_count,
+    }
+
+
+_PRINT_INBOX_FOLDER_NAME = "Print Inbox"
+
+
+def _get_or_create_print_inbox_folder(conn) -> str:
+    """Return the id of the singleton 'Print Inbox' folder, creating it
+    if absent. Top-level (parentId NULL) so the user can find it
+    alongside their own folders without digging."""
+    import uuid as _uuid
+
+    row = conn.execute(
+        "SELECT id FROM folders WHERE name = ? AND parentId IS NULL",
+        (_PRINT_INBOX_FOLDER_NAME,),
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    folder_id = str(_uuid.uuid4())
+    conn.execute(
+        "INSERT INTO folders(id,name,parentId) VALUES (?,?,?)",
+        (folder_id, _PRINT_INBOX_FOLDER_NAME, None),
+    )
+    return folder_id
+
+
+@router.post("/events/{event_id}/create-model")
+def create_model_from_event(event_id: int) -> dict[str, Any]:
+    """Spawn a STLVault model from this event's attached .gcode.3mf.
+
+    Preconditions: event has `archived3mfPath` set. Side effects:
+      1. Copy the .gcode.3mf into the upload root under `<modelId>.gcode.3mf`
+         so the standard download/viewer paths can serve it.
+      2. INSERT into the upstream `models` table (folder = singleton
+         "Print Inbox" at top-level).
+      3. Write a `centauri_model_hash` row using the whole-file MD5 as
+         `sourceMd5` and the first parsed mesh MD5 (if any) as
+         `embeddedMd5`, so future printer events can source-hash match
+         against this model.
+      4. Auto-confirm the event against the new model — writes a
+         centauri_review with action='confirm' + a custom_prints row.
+
+    Returns the new model dict in the same shape as POST /api/models/upload.
+    """
+    import hashlib
+    import json as _json
+    import os
+    import shutil
+    import sqlite3
+    import time as _time
+    import uuid as _uuid
+    from pathlib import Path
+
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    archived = ev.get("archived3mfPath")
+    if not archived:
+        raise HTTPException(
+            status_code=400,
+            detail="no .gcode.3mf attached to this event yet",
+        )
+
+    upload_root = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    try:
+        src_path = Path(archived).resolve()
+        src_path.relative_to(upload_root)
+    except (ValueError, OSError) as e:
+        log.warning("create-model: rejected archived path %r (%s)", archived, e)
+        raise HTTPException(status_code=404, detail="archive missing") from None
+    if not src_path.is_file():
+        raise HTTPException(status_code=404, detail="archive missing")
+
+    # Stable name + ext for the new model. We keep .gcode.3mf so the
+    # viewer can recognise it (the 3MF body inside is render-able by the
+    # existing react-three-fiber pipeline).
+    model_id = str(_uuid.uuid4())
+    ext = ".gcode.3mf"
+    dest_filename = f"{model_id}{ext}"
+    dest_path = upload_root / dest_filename
+    shutil.copyfile(src_path, dest_path)
+    size = dest_path.stat().st_size
+
+    # Display name: prefer the printer-side gcodeFilename's stem, falling
+    # back to the .gcode.3mf's leaf. Trim the slicer prefix so "ECC_0.4_
+    # dragon_PLA0.12_4h25m" lands as "dragon" when we can decode it.
+    base = ev.get("inputFilenameBase") or _strip_slicer_prefix(
+        ev.get("gcodeFilename") or src_path.name
+    )
+
+    now_ms = int(_time.time() * 1000)
+    meshes = repo.list_event_meshes(_db, event_id)
+    source_md5 = hashlib.md5(dest_path.read_bytes(), usedforsecurity=False).hexdigest()
+    embedded_md5 = meshes[0]["md5"] if meshes else None
+
+    conn = _db()
+    try:
+        folder_id = _get_or_create_print_inbox_folder(conn)
+        conn.execute(
+            "INSERT INTO models(id,name,folderId,url,size,dateAdded,tags,"
+            "description,thumbnail,sourceUrl) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                model_id,
+                base,
+                folder_id,
+                f"/api/models/{model_id}/download",
+                size,
+                now_ms,
+                _json.dumps(["centauri", "auto-import"]),
+                f"Created from Centauri print job {ev['sdcpJobId']}",
+                None,  # thumbnail — TODO: write plate_preview_png if we keep it
+                None,
+            ),
+        )
+        # Hash row so future events match against this model.
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO centauri_model_hash
+                (modelId, sourceMd5, embeddedMd5, computedAt)
+            VALUES (?, ?, ?, ?)
+            """,
+            (model_id, source_md5, embedded_md5, int(_time.time())),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        # Cleanup the file copy if the DB insert failed.
+        dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {e}") from e
+    finally:
+        conn.close()
+
+    # Auto-confirm the event against the new model. Reuses the same
+    # path as a manual confirm so the print log lands in custom_prints
+    # with source='centauri'.
+    print_id = repo.create_print_log_from_event(_db, ev, model_id)
+    repo.upsert_review(
+        _db,
+        event_id,
+        action="confirm",
+        resulting_print_id=print_id,
+        resulting_model_id=model_id,
+    )
+
+    _publish({"type": "event.reviewed", "eventId": event_id, "action": "confirm"})
+
+    return {
+        "id": model_id,
+        "name": base,
+        "folderId": folder_id,
+        "url": f"/api/models/{model_id}/download",
+        "size": size,
+        "dateAdded": now_ms,
+        "tags": ["centauri", "auto-import"],
+        "description": f"Created from Centauri print job {ev['sdcpJobId']}",
+        "thumbnail": None,
+        "sourceUrl": None,
+    }
+
+
+_SLICER_PREFIX_RE = __import__("re").compile(
+    r"^(?:ECC|BBL|PRUSA)_[\d.]+_(.+?)_(?:[A-Z]+[\d.]+)?(?:_\d+h\d+m)?(?:\.gcode(?:\.3mf)?)?$",
+    __import__("re").IGNORECASE,
+)
+
+
+def _strip_slicer_prefix(name: str) -> str:
+    """Best-effort recovery of the user-visible base name from a slicer
+    output filename like ECC_0.4_dragon_PLA0.12_4h25m.gcode.3mf → 'dragon'.
+
+    Conservative: if the regex doesn't fire, return the filename without
+    extension and that's good enough for a new-model name (the user can
+    rename in place).
+    """
+    m = _SLICER_PREFIX_RE.match(name)
+    if m:
+        return m.group(1)
+    # Fallback: strip .gcode.3mf / .3mf / .gcode / .stl extensions.
+    stem = name
+    for ext in (".gcode.3mf", ".3mf", ".gcode", ".stl"):
+        if stem.lower().endswith(ext):
+            stem = stem[: -len(ext)]
+            break
+    return stem or name
 
 
 @router.get("/auto-matched-models")

@@ -189,6 +189,48 @@ export const centauriApi = {
     return `${apiBase()}/centauri/events/${eventId}/gcode`;
   },
 
+  // Phase-4: create a new STLVault model from this event's attached
+  // .gcode.3mf. Drops it into a singleton "Print Inbox" folder and
+  // auto-confirms the event against the new model.
+  async createModelFromEvent(eventId: number): Promise<{
+    id: string;
+    name: string;
+    folderId: string;
+    size: number;
+    dateAdded: number;
+  }> {
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/events/${eventId}/create-model`, {
+        method: "POST",
+      }),
+    );
+  },
+
+  // Phase-4: attach the slicer's .gcode.3mf to an event. Backend parses
+  // it, MD5s every embedded mesh, persists the archive, and re-runs the
+  // matcher with the new source-hash signal lit up.
+  async attach3mf(
+    eventId: number,
+    file: File,
+  ): Promise<{
+    eventId: number;
+    archivedPath: string;
+    wholeFileMd5: string;
+    plateCount: number;
+    embeddedMeshCount: number;
+    transformsIdentity: boolean | null;
+    meshCount: number;
+  }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/events/${eventId}/attach-3mf`, {
+        method: "POST",
+        body: fd,
+      }),
+    );
+  },
+
   async review(
     eventId: number,
     action: "confirm" | "dismiss" | "reserve",

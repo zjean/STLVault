@@ -131,6 +131,34 @@ def ensure_centauri_tables(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Phase-4 — per-event mesh MD5s extracted from a user-attached
+    # `.gcode.3mf`. One row per mesh-like inner file the parser found.
+    # Soft FK to centauri_print_event.id; cascade-by-convention (cleared
+    # alongside the event row when an event is purged). Composite index
+    # on md5 powers the source-hash matcher's lookup against
+    # centauri_model_hash without a full table scan.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS centauri_event_mesh (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            eventId     INTEGER NOT NULL,
+            zipPath     TEXT NOT NULL,
+            md5         TEXT NOT NULL,
+            sizeBytes   INTEGER NOT NULL,
+            createdAt   INTEGER NOT NULL,
+            UNIQUE (eventId, zipPath)
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_centauri_event_mesh_md5 "
+        "ON centauri_event_mesh(md5)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_centauri_event_mesh_eventId "
+        "ON centauri_event_mesh(eventId)"
+    )
+
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_centauri_event_startedAt "
         "ON centauri_print_event(startedAt DESC)"

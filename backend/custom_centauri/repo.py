@@ -510,6 +510,112 @@ def clear_review(db: DbFactory, event_id: int) -> bool:
         conn.close()
 
 
+# --------------------------------------------------------- event-mesh (Phase 4)
+
+
+def replace_event_meshes(
+    db: DbFactory, event_id: int, meshes: list[dict[str, Any]]
+) -> int:
+    """Replace the mesh-row set for an event. Returns the inserted count.
+
+    `meshes` items: `{ zipPath, md5, sizeBytes }`. Idempotent — a second
+    attach call wipes the prior rows so a re-upload doesn't leak ghosts.
+    Cleared if `meshes` is empty (e.g. attached file parsed empty).
+    """
+    now = int(time.time())
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM centauri_event_mesh WHERE eventId = ?", (event_id,)
+        )
+        for m in meshes:
+            cur.execute(
+                """
+                INSERT INTO centauri_event_mesh
+                    (eventId, zipPath, md5, sizeBytes, createdAt)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    m["zipPath"],
+                    m["md5"],
+                    int(m.get("sizeBytes", 0)),
+                    now,
+                ),
+            )
+        conn.commit()
+        return len(meshes)
+    finally:
+        conn.close()
+
+
+def list_event_meshes(db: DbFactory, event_id: int) -> list[dict[str, Any]]:
+    """Return all mesh rows for an event, ordered by insert order."""
+    conn = db()
+    try:
+        rows = conn.execute(
+            "SELECT id, zipPath, md5, sizeBytes "
+            "FROM centauri_event_mesh WHERE eventId = ? ORDER BY id ASC",
+            (event_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "id": r["id"],
+            "zipPath": r["zipPath"],
+            "md5": r["md5"],
+            "sizeBytes": r["sizeBytes"],
+        }
+        for r in rows
+    ]
+
+
+def set_event_archived_3mf(
+    db: DbFactory,
+    event_id: int,
+    *,
+    archived_path: str | None,
+    plate_count: int | None,
+    embedded_mesh_count: int | None,
+    transforms_identity: int | None,
+) -> None:
+    """Persist the .gcode.3mf attachment metadata onto the event row.
+
+    All fields nullable: the parser may come up empty on a malformed
+    upload, in which case we still want to set `archivedPath` (so we
+    don't re-archive) but leave the count fields untouched. Callers
+    pass `None` to skip.
+    """
+    sets: list[str] = []
+    params: list[Any] = []
+    if archived_path is not None:
+        sets.append("archived3mfPath = ?")
+        params.append(archived_path)
+    if plate_count is not None:
+        sets.append("plateCount = ?")
+        params.append(plate_count)
+    if embedded_mesh_count is not None:
+        sets.append("embeddedMeshCount = ?")
+        params.append(embedded_mesh_count)
+    if transforms_identity is not None:
+        sets.append("plateTransformsIdentity = ?")
+        params.append(transforms_identity)
+    if not sets:
+        return
+    params.append(event_id)
+    conn = db()
+    try:
+        conn.execute(
+            f"UPDATE centauri_print_event SET {', '.join(sets)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_recently_auto_matched_models(
     db: DbFactory, *, since_seconds: int
 ) -> dict[str, int]:
