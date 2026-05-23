@@ -377,6 +377,120 @@ def list_recent_reserves(db: DbFactory, since_days: int = 30) -> list[dict[str, 
     return out
 
 
+# ---------------------------------------------------------------------- auto-confirm
+
+
+def get_auto_confirm_candidate(db: DbFactory, event_id: int) -> str | None:
+    """Return the model_id that should auto-confirm, or None.
+
+    Eligible when:
+      - `printer_filename` signal fired (the slicer-template-extracted
+        input_filename_base matched a model name), AND
+      - all candidate rows across every signal that fired point to the
+        same single model_id (i.e. nothing disagrees).
+
+    The basic `filename` signal can't fire on Centauri-side filenames
+    in practice — the printer stores prefix-heavy `.gcode`
+    (`ECC_0.4_<name>_PLA0.12_4h25m.gcode`) which the simple stem
+    normaliser doesn't decode. So we anchor the gate on
+    `printer_filename` (which DOES decode the slicer's template) and
+    treat any other signal as confirmatory rather than required. If
+    another signal disagrees on the model_id, fall through to the
+    inbox.
+
+    Multi-hit candidates write multiple rows with different model_ids,
+    so the "len(model_ids) == 1" check rejects them.
+    """
+    conn = db()
+    try:
+        rows = conn.execute(
+            "SELECT signal, modelId FROM centauri_match_candidate WHERE eventId = ?",
+            (event_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    if not any(r["signal"] == "printer_filename" for r in rows):
+        return None
+    model_ids = {r["modelId"] for r in rows}
+    if len(model_ids) != 1:
+        return None
+    return next(iter(model_ids))
+
+
+def list_recent_auto_matched(
+    db: DbFactory, hours: int = 24
+) -> list[dict[str, Any]]:
+    """Auto-confirmed events newer than `hours` ago, newest-first.
+
+    Feeds the inbox's "Recently auto-matched" panel where the user can
+    undo within the 24-hour window from the design.
+    """
+    cutoff = int(time.time()) - hours * 3600
+    conn = db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT e.*,
+                   r.reviewedAt AS autoMatchedAt,
+                   r.resultingPrintId,
+                   r.resultingModelId
+            FROM centauri_print_event e
+            JOIN centauri_review r ON r.eventId = e.id
+            WHERE r.action = 'auto'
+              AND r.reviewedAt >= ?
+            ORDER BY r.reviewedAt DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ev = _row_to_event(r)
+        ev["autoMatchedAt"] = r["autoMatchedAt"]
+        ev["resultingPrintId"] = r["resultingPrintId"]
+        ev["resultingModelId"] = r["resultingModelId"]
+        out.append(ev)
+    return out
+
+
+def delete_print_log(db: DbFactory, print_id: str) -> bool:
+    """Delete a `custom_prints` row by id. Returns True if a row was deleted.
+
+    Used by the auto-confirm undo path. Idempotent — missing rows return
+    False rather than raising. We deliberately don't touch Spoolman:
+    auto-confirmed prints land with `syncedToSpoolman=0` so there's no
+    spool to unwind.
+    """
+    conn = db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM custom_prints WHERE id = ?", (print_id,)
+        )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
+def clear_review(db: DbFactory, event_id: int) -> bool:
+    """Remove the review row so the event re-enters the inbox.
+
+    Used by undo. Returns True if a row was deleted.
+    """
+    conn = db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM centauri_review WHERE eventId = ?", (event_id,)
+        )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+    finally:
+        conn.close()
+
+
 def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
     """Flip reserves older than `max_age_days` to dismiss with audit reason.
 
