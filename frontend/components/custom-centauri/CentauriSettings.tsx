@@ -244,7 +244,7 @@ const CentauriSettings: React.FC = () => {
           />
           Auto-confirm high-confidence matches
           <span className="text-fg-3 text-[12px]">
-            (Phase 2 — currently no-op)
+            (single-model `printer_filename` or `source_hash` hit — 7-day undo)
           </span>
         </label>
 
