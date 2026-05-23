@@ -640,7 +640,15 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
 
 
 _SLICER_PREFIX_RE = __import__("re").compile(
-    r"^(?:ECC|BBL|PRUSA)_[\d.]+_(.+?)_(?:[A-Z]+[\d.]+)?(?:_\d+h\d+m)?(?:\.gcode(?:\.3mf)?)?$",
+    # Slicer-output filename shape: <prefix>_<nozzle>_<base>_<materialN.M>_<time>.gcode[.3mf]
+    # `<time>` is any combination of `\d+h`, `\d+m`, `\d+s` — observed:
+    #   _4h25m         (1h+ print)
+    #   _15m45s        (sub-1h, was missed by the old regex)
+    #   _45m           (round minutes)
+    #   _45s           (very short test print)
+    #   _4h25m13s      (full)
+    r"^(?:ECC|BBL|PRUSA)_[\d.]+_(.+?)_(?:[A-Z]+[\d.]+)?(?:_(?:\d+[hms])+)?"
+    r"(?:\.gcode(?:\.3mf)?)?$",
     __import__("re").IGNORECASE,
 )
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import ModelList from "./components/ModelList";
@@ -126,10 +126,14 @@ const App = () => {
     id?: string;
   }>({ isOpen: false, type: "single" });
 
-  // Initial Data Fetch
-  useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true);
+  // Library refresh — folders + models + storage stats in one round-trip.
+  // Used by initial fetch and by side-effecting flows that write to the
+  // upstream `models` / `folders` tables outside the normal upload path
+  // (e.g. Centauri's create-from-this-print, which spawns a model in a
+  // singleton "Print Inbox" folder).
+  const refreshLibrary = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) setIsLoading(true);
       try {
         const [fetchedFolders, fetchedModels, fetchedStats] = await Promise.all(
           [api.getFolders(), api.getModels("all"), api.getStorageStats()],
@@ -138,13 +142,18 @@ const App = () => {
         setModels(fetchedModels);
         setStorageStats(fetchedStats);
       } catch (error) {
-        console.error("Failed to fetch initial data:", error);
+        console.error("Failed to refresh library:", error);
       } finally {
-        setIsLoading(false);
+        if (!silent) setIsLoading(false);
       }
-    };
-    fetchData();
-  }, []);
+    },
+    [],
+  );
+
+  // Initial Data Fetch
+  useEffect(() => {
+    void refreshLibrary();
+  }, [refreshLibrary]);
 
   // Refresh storage stats when models change (upload, delete, replace)
   useEffect(() => {
@@ -841,6 +850,7 @@ const App = () => {
             onOpenMobileSidebar={
               !isDesktop ? () => setIsMobileSidebarOpen(true) : undefined
             }
+            onLibraryDirty={() => void refreshLibrary({ silent: true })}
           />
         ) : showTagDetail && currentTagName ? (
           <TagDetailView

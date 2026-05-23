@@ -30,6 +30,12 @@ interface InboxViewProps {
   models: STLModel[];
   onOpenMobileSidebar?: () => void;
   onBack: () => void;
+  // Called after side effects that mutate the upstream models/folders
+  // tables outside the normal upload path — currently the Phase-4
+  // "Create model from this print" flow. The parent uses it to
+  // re-fetch the library so the sidebar count + folder list + grid
+  // pick up the new model without a manual reload.
+  onLibraryDirty?: () => void;
 }
 
 const fmtTime = (ms: number | null | undefined): string => {
@@ -63,6 +69,7 @@ const InboxView: React.FC<InboxViewProps> = ({
   models,
   onOpenMobileSidebar,
   onBack,
+  onLibraryDirty,
 }) => {
   const [events, setEvents] = useState<PrintEventWithCandidates[] | null>(null);
   const [autoMatched, setAutoMatched] = useState<PrintEventWithCandidates[]>([]);
@@ -200,12 +207,14 @@ const InboxView: React.FC<InboxViewProps> = ({
     setBusy(eventId, true);
     try {
       const m = await centauriApi.createModelFromEvent(eventId);
-      // Show a small "created" affirmation by piggy-backing on the
-      // error banner channel with success styling would be nice; for
-      // now, surface the model name in a one-shot status string the
-      // user can dismiss by re-interacting.
       setLoadError(null);
+      // Two refreshes — the inbox loses the now-confirmed event, and
+      // the parent's library state needs to learn about the new model
+      // + the singleton "Print Inbox" folder. onLibraryDirty is the
+      // hook for the latter; without it the sidebar count + folder
+      // list stay stale until a manual reload.
       await refresh();
+      onLibraryDirty?.();
       // Best-effort: log the new model id to the console so a power user
       // can grep. No router navigation here — the user can find it in
       // the Print Inbox folder via the sidebar.
