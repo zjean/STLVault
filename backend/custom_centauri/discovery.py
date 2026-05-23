@@ -21,7 +21,7 @@ DISCOVERY_PROBE = b"M99999"
 DEFAULT_TIMEOUT = 3.0
 
 
-@dataclass(slots=True)
+@dataclass
 class DiscoveredPrinter:
     host: str
     mainboard_id: str | None
