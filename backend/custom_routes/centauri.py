@@ -25,7 +25,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from custom_centauri import gcode3mf_meta, matcher, repo
+from custom_centauri import gcode3mf_meta, hash_backfill, matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
 
@@ -632,6 +632,27 @@ def _strip_slicer_prefix(name: str) -> str:
             stem = stem[: -len(ext)]
             break
     return stem or name
+
+
+@router.post("/backfill-hashes")
+def backfill_hashes() -> dict[str, Any]:
+    """Compute MD5s for every existing STLVault model so the source_hash
+    matcher signal can fire against the existing library.
+
+    Phase 4.x — orthogonal to the rest of Phase 4. Idempotent: models
+    that already have a row in `centauri_model_hash` are skipped (the
+    `skipped_existing` counter).
+
+    Synchronous. Library scale is hundreds of models; MD5-ing a 50 MB
+    STL takes a fraction of a second. Larger libraries should still
+    finish well inside any reasonable HTTP timeout.
+    """
+    import os
+    from pathlib import Path
+
+    upload_dir = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    stats = hash_backfill.backfill_all(_db, upload_dir)
+    return stats
 
 
 @router.get("/auto-matched-models")
