@@ -65,6 +65,12 @@ export interface MatchCandidate {
 
 export interface PrintEventWithCandidates extends PrintEvent {
   candidates: MatchCandidate[];
+  // Review row when present — null for never-reviewed events. Reserved
+  // events have `review.action === 'reserve'` (non-terminal).
+  review?: PrintReview | null;
+  // `reservedAt` is populated only on the /reserves response. Optional
+  // because the same type also represents inbox events (no reserve row).
+  reservedAt?: number;
 }
 
 export interface DiscoveredPrinter {
@@ -162,7 +168,7 @@ export const centauriApi = {
 
   async review(
     eventId: number,
-    action: "confirm" | "dismiss",
+    action: "confirm" | "dismiss" | "reserve",
     opts: { modelId?: string; reason?: string } = {},
   ): Promise<PrintReview> {
     return jsonOrThrow(
@@ -171,6 +177,14 @@ export const centauriApi = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ...opts }),
       }),
+    );
+  },
+
+  async listReserves(sinceDays = 30): Promise<PrintEventWithCandidates[]> {
+    const params = new URLSearchParams();
+    params.set("since_days", String(sinceDays));
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/reserves?${params}`),
     );
   },
 

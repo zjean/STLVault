@@ -21,6 +21,11 @@ import {
 import MakerworldLikedModal from "./components/custom-importers/MakerworldLikedModal";
 import PrintsHistoryView from "./components/custom-spoolman/PrintsHistoryView";
 import InboxView from "./components/custom-centauri/InboxView";
+import PostUploadLinkDialog from "./components/custom-centauri/PostUploadLinkDialog";
+import {
+  centauriApi,
+  PrintEventWithCandidates,
+} from "./services/custom-centauri";
 import {
   FolderInput,
   Tags,
@@ -56,6 +61,13 @@ const App = () => {
     used: 0,
     total: 0,
   });
+
+  // Centauri reserve-for-upload follow-up: after an upload batch, if any
+  // events are sitting in `reserve` state we offer a one-shot link dialog.
+  const [reserveLinkDialog, setReserveLinkDialog] = useState<{
+    uploadedModels: STLModel[];
+    reserves: PrintEventWithCandidates[];
+  } | null>(null);
 
   const [currentFolderId, setCurrentFolderId] = useState<string>("all");
   const [currentFolderParentId, setCurrentFolderParentId] = useState("");
@@ -265,6 +277,7 @@ const App = () => {
     tags: string[],
   ) => {
     setUploadQueue((prev) => prev + files.length);
+    const uploaded: STLModel[] = [];
 
     for (const file of files) {
       try {
@@ -284,10 +297,28 @@ const App = () => {
           tags,
         );
         setModels((prev) => [newModel, ...prev]);
+        uploaded.push(newModel);
       } catch (error) {
         console.error(`Failed to upload ${file.name}:`, error);
       } finally {
         setUploadQueue((prev) => prev - 1);
+      }
+    }
+
+    // Post-upload: if any Centauri events are reserved and waiting for
+    // a model to land, offer a one-shot link dialog. Soft-fails — the
+    // backend may be unreachable, the printer may not be configured, etc;
+    // none of those should block the upload UX.
+    if (uploaded.length > 0) {
+      try {
+        const reserves = await centauriApi.listReserves();
+        if (reserves.length > 0) {
+          setReserveLinkDialog({ uploadedModels: uploaded, reserves });
+        }
+      } catch (e) {
+        // Quiet — no toast infrastructure to surface this and it's
+        // strictly opt-in.
+        console.debug("centauri reserves probe failed:", e);
       }
     }
   };
@@ -1253,6 +1284,19 @@ const App = () => {
                     )}
                   </div>
                 </Dialog>
+              )}
+
+              {reserveLinkDialog && (
+                <PostUploadLinkDialog
+                  uploadedModels={reserveLinkDialog.uploadedModels}
+                  reserves={reserveLinkDialog.reserves}
+                  onClose={() => setReserveLinkDialog(null)}
+                  onLinked={() => {
+                    // Print logs were written backend-side; nothing to
+                    // refresh in the library view itself. Recent/Prints
+                    // panels refetch on next mount.
+                  }}
+                />
               )}
 
               {showTagModal && (

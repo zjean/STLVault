@@ -158,6 +158,13 @@ async def _start_centauri_client() -> None:
     # will sit idle if no IP is configured and reconnect on settings PUT.
     from custom_centauri import repo as centauri_repo
     settings = centauri_repo.get_settings(get_db_conn)
+    # Audit-preserving expiry of 30-day-stale reserves. Single indexed
+    # write so we don't need a separate scheduled job for this.
+    flipped = centauri_repo.expire_old_reserves(get_db_conn)
+    if flipped:
+        logging.getLogger(__name__).info(
+            "centauri: expired %d stale reserve(s) on startup", flipped
+        )
     await _centauri_client.start(settings.get("printerIp"))
 
 
