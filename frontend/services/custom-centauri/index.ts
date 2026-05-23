@@ -189,6 +189,22 @@ export const centauriApi = {
     return `${apiBase()}/centauri/events/${eventId}/gcode`;
   },
 
+  // Phase-4.x: walk every existing STLVault model, MD5 its source file,
+  // write `centauri_model_hash` so source_hash matching can fire against
+  // the existing library. Idempotent — models that already have a hash
+  // are skipped. Synchronous (no progress stream); the response stats
+  // tell the caller how the batch landed.
+  async backfillHashes(): Promise<{
+    processed: number;
+    skipped_existing: number;
+    missing_file: number;
+    errors: number;
+  }> {
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/backfill-hashes`, { method: "POST" }),
+    );
+  },
+
   // Phase-4: create a new STLVault model from this event's attached
   // .gcode.3mf. Drops it into a singleton "Print Inbox" folder and
   // auto-confirms the event against the new model.

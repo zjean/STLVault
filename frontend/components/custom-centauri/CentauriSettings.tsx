@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Check,
   CircleAlert,
+  Database,
   Loader2,
   Printer,
   Radio,
@@ -44,6 +45,44 @@ const CentauriSettings: React.FC = () => {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState>({ kind: "idle" });
   const [discoverState, setDiscoverState] = useState<DiscoverState>({ kind: "idle" });
+
+  // Phase-4.x model-hash backfill — populates centauri_model_hash for
+  // existing library entries so source_hash matching works
+  // retroactively. One-shot; idempotent — re-running just skips
+  // already-hashed models.
+  type BackfillState =
+    | { kind: "idle" }
+    | { kind: "running" }
+    | {
+        kind: "done";
+        processed: number;
+        skippedExisting: number;
+        missingFile: number;
+        errors: number;
+      }
+    | { kind: "fail"; message: string };
+  const [backfillState, setBackfillState] = useState<BackfillState>({
+    kind: "idle",
+  });
+
+  const handleBackfill = async () => {
+    setBackfillState({ kind: "running" });
+    try {
+      const stats = await centauriApi.backfillHashes();
+      setBackfillState({
+        kind: "done",
+        processed: stats.processed,
+        skippedExisting: stats.skipped_existing,
+        missingFile: stats.missing_file,
+        errors: stats.errors,
+      });
+    } catch (e) {
+      setBackfillState({
+        kind: "fail",
+        message: e instanceof Error ? e.message : "Backfill failed",
+      });
+    }
+  };
 
   // Load settings + status on mount, then poll status every 4s while the
   // panel is mounted. The SSE bus pushes settings changes elsewhere; here
@@ -367,6 +406,64 @@ const CentauriSettings: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* Phase-4.x: one-shot MD5 backfill so source_hash matcher fires
+          against existing models. Idempotent; safe to re-run. */}
+      <div className="pt-3 border-t border-border-soft">
+        <div className="flex items-start gap-3 flex-wrap">
+          <div className="flex-1 min-w-0">
+            <h4 className="m-0 text-[13px] font-semibold text-fg">
+              Source-hash matching for existing models
+            </h4>
+            <p className="m-0 mt-1 text-[12px] text-fg-3 max-w-[480px]">
+              Compute MD5s for every model in your library so the
+              Centauri source-hash signal can match against them. Run
+              once after upgrading; idempotent on subsequent runs.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleBackfill()}
+            disabled={backfillState.kind === "running"}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-surface hover:bg-surface-2 text-[12.5px] text-fg-2 transition-colors disabled:opacity-50"
+          >
+            {backfillState.kind === "running" ? (
+              <>
+                <Loader2 size={13} className="animate-spin" /> Hashing…
+              </>
+            ) : (
+              <>
+                <Database size={13} /> Backfill hashes
+              </>
+            )}
+          </button>
+        </div>
+        {backfillState.kind === "done" && (
+          <p className="mt-2 text-[12px] text-fg-3 inline-flex items-center gap-1.5">
+            <Check size={12} className="text-success" />
+            Hashed {backfillState.processed} new
+            {backfillState.skippedExisting > 0 && (
+              <> · {backfillState.skippedExisting} already hashed</>
+            )}
+            {backfillState.missingFile > 0 && (
+              <> · {backfillState.missingFile} missing on disk</>
+            )}
+            {backfillState.errors > 0 && (
+              <>
+                {" · "}
+                <span className="text-warning">
+                  {backfillState.errors} error{backfillState.errors === 1 ? "" : "s"}
+                </span>
+              </>
+            )}
+          </p>
+        )}
+        {backfillState.kind === "fail" && (
+          <p className="mt-2 text-[12px] text-danger inline-flex items-center gap-1.5">
+            <CircleAlert size={12} /> {backfillState.message}
+          </p>
+        )}
+      </div>
     </div>
   );
 };
