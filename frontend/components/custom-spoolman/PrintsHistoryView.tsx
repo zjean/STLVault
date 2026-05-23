@@ -197,12 +197,16 @@ const PrintsHistoryView: React.FC<Props> = ({
   }, []);
 
   // Lazy-fetch when the user opens the panel — saves a Spoolman roundtrip
-  // for users who never look at it.
+  // for users who never look at it. The `reconError == null` guard prevents
+  // an infinite refetch loop when the endpoint errors (e.g. 409 from an
+  // unconfigured Spoolman client): without it, the effect re-fires every time
+  // `reconLoading` flips back to false while `recon` stays null. Manual retry
+  // still works via the Refresh button, which clears `reconError` first.
   useEffect(() => {
-    if (reconOpen && recon == null && !reconLoading) {
+    if (reconOpen && recon == null && !reconLoading && reconError == null) {
       void loadReconciliation();
     }
-  }, [reconOpen, recon, reconLoading, loadReconciliation]);
+  }, [reconOpen, recon, reconLoading, reconError, loadReconciliation]);
 
   const modelById = useMemo(() => {
     const m: Record<string, STLModel> = {};
