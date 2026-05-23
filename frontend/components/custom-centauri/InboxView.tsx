@@ -71,7 +71,7 @@ const InboxView: React.FC<InboxViewProps> = ({
     try {
       const [inbox, auto] = await Promise.all([
         centauriApi.listEvents(false),
-        centauriApi.listRecentAutoMatched(24).catch(() => []),
+        centauriApi.listRecentAutoMatched().catch(() => []),
       ]);
       setEvents(inbox);
       setAutoMatched(auto);
@@ -270,7 +270,7 @@ const InboxView: React.FC<InboxViewProps> = ({
                 <Zap size={13} className="text-accent" />
                 Recently auto-matched
                 <span className="text-[11.5px] text-fg-3 font-normal">
-                  (undo within 24h)
+                  (undo within 7 days)
                 </span>
               </h3>
               <div className="mt-3 space-y-2">
@@ -603,12 +603,22 @@ const ModelPicker: React.FC<{
 // but the panel itself filters by `autoMatchedAt >= now - 24h` server-
 // side, so the user shouldn't see a row that can't be undone.
 
-const fmtHoursLeft = (autoMatchedAt: number | undefined): string => {
+// 7-day undo window — matches the backend's UNDO_WINDOW_SECONDS in
+// custom_routes/centauri.py. Keep these in sync if either side changes.
+const UNDO_WINDOW_MS = 7 * 24 * 3600 * 1000;
+
+const fmtUndoLeft = (autoMatchedAt: number | undefined): string => {
   if (!autoMatchedAt) return "—";
-  const expiry = autoMatchedAt * 1000 + 24 * 3600 * 1000;
+  const expiry = autoMatchedAt * 1000 + UNDO_WINDOW_MS;
   const msLeft = expiry - Date.now();
-  if (msLeft <= 0) return "0h left";
-  const hours = Math.floor(msLeft / 3_600_000);
+  if (msLeft <= 0) return "0m left";
+  const days = Math.floor(msLeft / 86_400_000);
+  const hours = Math.floor((msLeft % 86_400_000) / 3_600_000);
+  if (days >= 1) {
+    // Show "Nd Mh" for the first six days, drop the hours on the
+    // last day so the chip stays compact.
+    return hours > 0 ? `${days}d ${hours}h left` : `${days}d left`;
+  }
   if (hours >= 1) return `${hours}h left`;
   const minutes = Math.max(1, Math.floor(msLeft / 60_000));
   return `${minutes}m left`;
@@ -653,7 +663,7 @@ const AutoMatchedRow: React.FC<{
         )}
       </div>
       <span className="text-[11px] text-fg-3 font-mono whitespace-nowrap">
-        {fmtHoursLeft(event.autoMatchedAt)}
+        {fmtUndoLeft(event.autoMatchedAt)}
       </span>
       <button
         type="button"

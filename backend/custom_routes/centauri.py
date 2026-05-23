@@ -332,12 +332,13 @@ def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str
 
 
 @router.get("/events/recent-auto")
-def list_recent_auto(hours: int = 24) -> list[dict[str, Any]]:
+def list_recent_auto(hours: int = 168) -> list[dict[str, Any]]:
     """Auto-confirmed events still inside the undo window.
 
-    Surfaces the "Recently auto-matched" panel in the inbox. Each entry
-    carries the resulting print + model ids so the UI can link to the
-    model row and offer an Undo button until `autoMatchedAt + hours`.
+    Default mirrors UNDO_WINDOW_SECONDS (7 days). Surfaces the
+    "Recently auto-matched" panel in the inbox; each entry carries the
+    resulting print + model ids so the UI can link to the model row and
+    offer an Undo button until `autoMatchedAt + hours`.
 
     Declared BEFORE the parameterised `/events/{event_id}` so FastAPI's
     in-order route resolution matches the literal first — otherwise
@@ -392,9 +393,12 @@ async def event_thumbnail(event_id: int) -> StreamingResponse:
     return StreamingResponse(iter([r.content]), media_type="image/png")
 
 
+UNDO_WINDOW_SECONDS = 7 * 24 * 3600  # 7 days; matches the design's revisit horizon
+
+
 @router.post("/events/{event_id}/undo")
 def undo_auto(event_id: int) -> dict[str, Any]:
-    """Roll back an auto-confirmed event within 24h.
+    """Roll back an auto-confirmed event within the undo window.
 
     Deletes the print log, clears the review row so the event reappears
     in the inbox, and publishes `event.new` so the UI refreshes. 410
@@ -411,10 +415,10 @@ def undo_auto(event_id: int) -> dict[str, Any]:
             detail="event is not auto-confirmed; nothing to undo",
         )
     age = int(time.time()) - int(review["reviewedAt"])
-    if age > 24 * 3600:
+    if age > UNDO_WINDOW_SECONDS:
         raise HTTPException(
             status_code=410,
-            detail="undo window has expired (24h); manage the print log directly",
+            detail="undo window has expired (7 days); manage the print log directly",
         )
     print_id = review.get("resultingPrintId")
     if print_id:
