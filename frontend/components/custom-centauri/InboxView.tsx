@@ -12,6 +12,8 @@ import {
   Printer,
   Bookmark,
   Weight,
+  Zap,
+  Undo2,
 } from "lucide-react";
 import {
   centauriApi,
@@ -60,14 +62,19 @@ const InboxView: React.FC<InboxViewProps> = ({
   onBack,
 }) => {
   const [events, setEvents] = useState<PrintEventWithCandidates[] | null>(null);
+  const [autoMatched, setAutoMatched] = useState<PrintEventWithCandidates[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pickerOpenFor, setPickerOpenFor] = useState<PrintEventWithCandidates | null>(null);
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
 
   const refresh = useCallback(async () => {
     try {
-      const list = await centauriApi.listEvents(false);
-      setEvents(list);
+      const [inbox, auto] = await Promise.all([
+        centauriApi.listEvents(false),
+        centauriApi.listRecentAutoMatched(24).catch(() => []),
+      ]);
+      setEvents(inbox);
+      setAutoMatched(auto);
       setLoadError(null);
     } catch (e) {
       setLoadError(
@@ -84,14 +91,19 @@ const InboxView: React.FC<InboxViewProps> = ({
     void refresh();
   }, [refresh]);
 
-  // Live updates via SSE — new events and review state changes both
-  // refresh the visible list.
+  // Live updates via SSE — new events, review state changes, and
+  // auto-confirms each refresh the visible lists. The auto-matched
+  // panel uses the same data source so refresh keeps both in sync.
   useEffect(() => {
     const es = new EventSource(centauriApi.streamUrl());
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as { type: string };
-        if (msg.type === "event.new" || msg.type === "event.reviewed") {
+        if (
+          msg.type === "event.new" ||
+          msg.type === "event.reviewed" ||
+          msg.type === "event.auto"
+        ) {
           void refresh();
         }
       } catch {
@@ -146,6 +158,18 @@ const InboxView: React.FC<InboxViewProps> = ({
       await refresh();
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Reserve failed");
+    } finally {
+      setBusy(eventId, false);
+    }
+  };
+
+  const handleUndo = async (eventId: number) => {
+    setBusy(eventId, true);
+    try {
+      await centauriApi.undoAuto(eventId);
+      await refresh();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Undo failed");
     } finally {
       setBusy(eventId, false);
     }
@@ -237,6 +261,28 @@ const InboxView: React.FC<InboxViewProps> = ({
                   onReserve={() => void handleReserve(ev.id)}
                 />
               ))}
+            </div>
+          )}
+
+          {autoMatched.length > 0 && (
+            <div className="mt-8">
+              <h3 className="text-[14px] font-semibold text-fg-2 m-0 flex items-center gap-2">
+                <Zap size={13} className="text-accent" />
+                Recently auto-matched
+                <span className="text-[11.5px] text-fg-3 font-normal">
+                  (undo within 24h)
+                </span>
+              </h3>
+              <div className="mt-3 space-y-2">
+                {autoMatched.map((ev) => (
+                  <AutoMatchedRow
+                    key={ev.id}
+                    event={ev}
+                    busy={busyIds.has(ev.id)}
+                    onUndo={() => void handleUndo(ev.id)}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -547,6 +593,78 @@ const ModelPicker: React.FC<{
         </div>
       </div>
     </div>
+  );
+};
+
+// ---------------------------------------------------- AutoMatchedRow
+// Compact row for the inbox's "Recently auto-matched" panel. Shows the
+// model the ingest path linked the print to, with an Undo button while
+// inside the 24-hour window. Past the window the backend returns 410,
+// but the panel itself filters by `autoMatchedAt >= now - 24h` server-
+// side, so the user shouldn't see a row that can't be undone.
+
+const fmtHoursLeft = (autoMatchedAt: number | undefined): string => {
+  if (!autoMatchedAt) return "—";
+  const expiry = autoMatchedAt * 1000 + 24 * 3600 * 1000;
+  const msLeft = expiry - Date.now();
+  if (msLeft <= 0) return "0h left";
+  const hours = Math.floor(msLeft / 3_600_000);
+  if (hours >= 1) return `${hours}h left`;
+  const minutes = Math.max(1, Math.floor(msLeft / 60_000));
+  return `${minutes}m left`;
+};
+
+const AutoMatchedRow: React.FC<{
+  event: PrintEventWithCandidates;
+  busy: boolean;
+  onUndo: () => void;
+}> = ({ event, busy, onUndo }) => {
+  const [thumbErrored, setThumbErrored] = useState(false);
+  const candidate = (event.candidates ?? []).find(
+    (c) => c.modelId === event.resultingModelId,
+  );
+  const modelName = candidate?.modelName ?? "(deleted model)";
+  return (
+    <article className="rounded-card border border-border-soft bg-surface px-3 py-2 flex items-center gap-3">
+      <div className="w-10 h-10 flex-shrink-0 rounded-md bg-bg-3 overflow-hidden grid place-items-center">
+        {thumbErrored ? (
+          <Printer size={14} className="text-fg-3" />
+        ) : (
+          <img
+            src={centauriApi.thumbnailUrl(event.id)}
+            alt=""
+            className="w-full h-full object-cover"
+            onError={() => setThumbErrored(true)}
+          />
+        )}
+      </div>
+      <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+        <span className="text-[12.5px] text-fg truncate font-medium">
+          {modelName}
+        </span>
+        <span className="text-[11px] text-fg-3 font-mono truncate">
+          {event.gcodeFilename}
+        </span>
+        {event.estFilamentG != null && (
+          <span className="text-[11px] text-fg-3 inline-flex items-center gap-1">
+            <Weight size={10} />
+            {event.estFilamentG.toFixed(1)}g
+          </span>
+        )}
+      </div>
+      <span className="text-[11px] text-fg-3 font-mono whitespace-nowrap">
+        {fmtHoursLeft(event.autoMatchedAt)}
+      </span>
+      <button
+        type="button"
+        onClick={onUndo}
+        disabled={busy}
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-surface hover:bg-surface-2 text-[12px] text-fg-2 transition-colors disabled:opacity-50"
+      >
+        <Undo2 size={12} />
+        Undo
+      </button>
+    </article>
   );
 };
 

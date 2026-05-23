@@ -101,6 +101,69 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
             log.info("centauri matcher: event %s — %d candidate(s)", row_id, n)
         except Exception:  # noqa: BLE001
             log.exception("centauri matcher: failed (event=%s)", row_id)
+
+        # Phase-3 auto-confirm gate. Fires when:
+        #   - autoConfirmEnabled toggle is on (default), AND
+        #   - both `filename` and `printer_filename` signals fired, AND
+        #   - they agree on a single model_id.
+        # Anything ambiguous (multi-hit, signals disagreeing, only one
+        # signal firing) falls through to the inbox. Spool-resolution
+        # is deferred to Phase 3b — auto-matched prints land with
+        # syncedToSpoolman=0 and rely on the existing Spoolman retry
+        # surface, same as manual confirms today.
+        try:
+            settings = repo.get_settings(_db_conn_factory)
+            if settings.get("autoConfirmEnabled"):
+                target_model_id = repo.get_auto_confirm_candidate(
+                    _db_conn_factory, row_id
+                )
+                if target_model_id:
+                    # Verify the model still exists — soft FK so possible
+                    # for the matcher's cached candidate row to outlive
+                    # the model.
+                    conn = _db_conn_factory()
+                    try:
+                        exists = conn.execute(
+                            "SELECT 1 FROM models WHERE id = ?",
+                            (target_model_id,),
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                    if exists:
+                        ev_row = repo.get_event(_db_conn_factory, row_id)
+                        if ev_row is not None:
+                            print_id = repo.create_print_log_from_event(
+                                _db_conn_factory, ev_row, target_model_id
+                            )
+                            repo.upsert_review(
+                                _db_conn_factory,
+                                row_id,
+                                action="auto",
+                                reason="printer_filename single-hit; no signal disagreed",
+                                resulting_print_id=print_id,
+                                resulting_model_id=target_model_id,
+                            )
+                            log.info(
+                                "centauri ingest: auto-confirmed event %s "
+                                "against model %s (print %s)",
+                                row_id,
+                                target_model_id,
+                                print_id,
+                            )
+                            _publish(
+                                {
+                                    "type": "event.auto",
+                                    "eventId": row_id,
+                                    "modelId": target_model_id,
+                                    "printId": print_id,
+                                }
+                            )
+                            return
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "centauri ingest: auto-confirm gate failed (event=%s)", row_id
+            )
+
         _publish({"type": "event.new", "eventId": row_id})
 
     return _ingest
@@ -268,6 +331,28 @@ def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str
     return events
 
 
+@router.get("/events/recent-auto")
+def list_recent_auto(hours: int = 24) -> list[dict[str, Any]]:
+    """Auto-confirmed events still inside the undo window.
+
+    Surfaces the "Recently auto-matched" panel in the inbox. Each entry
+    carries the resulting print + model ids so the UI can link to the
+    model row and offer an Undo button until `autoMatchedAt + hours`.
+
+    Declared BEFORE the parameterised `/events/{event_id}` so FastAPI's
+    in-order route resolution matches the literal first — otherwise
+    "recent-auto" gets parsed as a non-int event_id and the framework
+    returns 422 before our handler runs. Same gotcha noted on
+    `/events/stream` above.
+    """
+    hrs = max(1, min(int(hours), 168))  # clamp 1h..7d
+    events = repo.list_recent_auto_matched(_db, hours=hrs)
+    for ev in events:
+        ev["candidates"] = matcher.list_candidates(_db, ev["id"])
+        ev["review"] = repo.get_review(_db, ev["id"])
+    return events
+
+
 @router.get("/events/{event_id}")
 def get_event(event_id: int) -> dict[str, Any]:
     ev = repo.get_event(_db, event_id)
@@ -305,6 +390,38 @@ async def event_thumbnail(event_id: int) -> StreamingResponse:
     if r.status_code != 200:
         raise HTTPException(status_code=404, detail="thumbnail not available")
     return StreamingResponse(iter([r.content]), media_type="image/png")
+
+
+@router.post("/events/{event_id}/undo")
+def undo_auto(event_id: int) -> dict[str, Any]:
+    """Roll back an auto-confirmed event within 24h.
+
+    Deletes the print log, clears the review row so the event reappears
+    in the inbox, and publishes `event.new` so the UI refreshes. 410
+    Gone once the window has elapsed — the print log stays in history
+    where the user can manage it the same as any manual print.
+    """
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    review = repo.get_review(_db, event_id)
+    if review is None or review["action"] != "auto":
+        raise HTTPException(
+            status_code=400,
+            detail="event is not auto-confirmed; nothing to undo",
+        )
+    age = int(time.time()) - int(review["reviewedAt"])
+    if age > 24 * 3600:
+        raise HTTPException(
+            status_code=410,
+            detail="undo window has expired (24h); manage the print log directly",
+        )
+    print_id = review.get("resultingPrintId")
+    if print_id:
+        repo.delete_print_log(_db, str(print_id))
+    repo.clear_review(_db, event_id)
+    _publish({"type": "event.new", "eventId": event_id})
+    return {"ok": True, "eventId": event_id, "deletedPrintId": print_id}
 
 
 @router.get("/reserves")

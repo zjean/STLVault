@@ -82,6 +82,11 @@ export interface PrintEventWithCandidates extends PrintEvent {
   // `reservedAt` is populated only on the /reserves response. Optional
   // because the same type also represents inbox events (no reserve row).
   reservedAt?: number;
+  // Populated only on the /events/recent-auto response — when the
+  // ingest path auto-confirmed the event against a unique model.
+  autoMatchedAt?: number;
+  resultingPrintId?: string | null;
+  resultingModelId?: string | null;
 }
 
 export interface DiscoveredPrinter {
@@ -187,6 +192,22 @@ export const centauriApi = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ...opts }),
+      }),
+    );
+  },
+
+  async listRecentAutoMatched(hours = 24): Promise<PrintEventWithCandidates[]> {
+    const params = new URLSearchParams();
+    params.set("hours", String(hours));
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/events/recent-auto?${params}`),
+    );
+  },
+
+  async undoAuto(eventId: number): Promise<{ ok: boolean; eventId: number; deletedPrintId: string | null }> {
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/events/${eventId}/undo`, {
+        method: "POST",
       }),
     );
   },
