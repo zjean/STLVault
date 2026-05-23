@@ -76,6 +76,14 @@ def normalise_filename_stem(name: str) -> str:
 # First-guess thresholds — recalibrate after live data.
 CONFIDENCE_FILENAME_SINGLE = 0.7
 CONFIDENCE_FILENAME_MULTI = 0.4
+# `printer_filename` is the slicer-template-extracted input filename
+# (see gcode_meta.extract_input_filename_base). It's a strictly better
+# signal than the generic filename stem because the slicer prefixes its
+# output with `ECC_<nozzle>_..._<duration>.gcode` — meaning the generic
+# normaliser sees `ecc_0.4_dragon_pla0.12_4h25m` and finds nothing,
+# while the printer_filename signal sees `dragon` and matches cleanly.
+CONFIDENCE_PRINTER_FILENAME_SINGLE = 0.8
+CONFIDENCE_PRINTER_FILENAME_MULTI = 0.5
 
 
 def match_filename(db: DbFactory, event_id: int, gcode_filename: str) -> int:
@@ -173,6 +181,76 @@ def list_candidates(db: DbFactory, event_id: int) -> list[dict]:
     ]
 
 
-def run_all_signals(db: DbFactory, event_id: int, gcode_filename: str) -> int:
-    """Phase-2 dispatcher — only filename for now. Returns total candidates."""
-    return match_filename(db, event_id, gcode_filename)
+def match_printer_filename(
+    db: DbFactory, event_id: int, input_filename_base: str
+) -> int:
+    """Run the printer_filename signal — match against `inputFilenameBase`.
+
+    Same DELETE-+-INSERT idempotency as `match_filename`, but writes
+    under `signal='printer_filename'` so this can coexist with the
+    generic filename hits and so the inbox can colour them differently
+    later.
+    """
+    needle = normalise_filename_stem(input_filename_base)
+    if not needle:
+        return 0
+    conn = db()
+    try:
+        rows = conn.execute("SELECT id, name FROM models").fetchall()
+        matches = [r for r in rows if normalise_filename_stem(r["name"]) == needle]
+        conn.execute(
+            "DELETE FROM centauri_match_candidate "
+            "WHERE eventId = ? AND signal = 'printer_filename'",
+            (event_id,),
+        )
+        if not matches:
+            conn.commit()
+            return 0
+        confidence = (
+            CONFIDENCE_PRINTER_FILENAME_SINGLE
+            if len(matches) == 1
+            else CONFIDENCE_PRINTER_FILENAME_MULTI
+        )
+        reason = (
+            f"slicer template input_filename_base {needle!r} "
+            f"matches {len(matches)} model(s)"
+        )
+        for m in matches:
+            conn.execute(
+                """
+                INSERT INTO centauri_match_candidate (
+                    eventId, modelId, signal, confidence, reason
+                ) VALUES (?, ?, 'printer_filename', ?, ?)
+                """,
+                (event_id, m["id"], confidence, reason),
+            )
+        conn.commit()
+        log.info(
+            "centauri matcher: event %s — %d printer_filename hit(s) for %r",
+            event_id,
+            len(matches),
+            input_filename_base,
+        )
+        return len(matches)
+    finally:
+        conn.close()
+
+
+def run_all_signals(db: DbFactory, event_id: int, event: dict) -> int:
+    """Phase-2.2 dispatcher.
+
+    Accepts the full event dict so each signal can pluck what it needs.
+    Signals run independently and write disjoint candidate-rows; the
+    UI's "top candidate" is the highest-confidence hit across all
+    signals.
+
+    Backward-compat: callers used to pass `gcode_filename` as a string
+    — now they pass the event dict. The ingest callback in
+    custom_routes/centauri.py is the only in-tree caller and has been
+    updated alongside this change.
+    """
+    total = match_filename(db, event_id, event.get("gcodeFilename", ""))
+    base = event.get("inputFilenameBase")
+    if base:
+        total += match_printer_filename(db, event_id, base)
+    return total

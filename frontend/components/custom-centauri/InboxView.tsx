@@ -11,6 +11,7 @@ import {
   Loader2,
   Printer,
   Bookmark,
+  Weight,
 } from "lucide-react";
 import {
   centauriApi,
@@ -330,6 +331,15 @@ const EventCard: React.FC<{
               ? `${fmtDuration(event.actTimeMin)} actual`
               : `${fmtDuration(event.estTimeMin)} est`}
           </span>
+          {event.estFilamentG != null && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-bg-3"
+              title="Filament weight estimated by the slicer"
+            >
+              <Weight size={11} />
+              {event.estFilamentG.toFixed(1)}g
+            </span>
+          )}
           <span className="px-2 py-0.5 rounded bg-bg-3 text-fg-3">
             Started {fmtTime(event.startedAt)}
           </span>

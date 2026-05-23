@@ -114,8 +114,9 @@ def insert_event(db: DbFactory, event: dict[str, Any]) -> int | None:
                 estTimeMin, actTimeMin, estFilamentG, actFilamentG,
                 plateCount, embeddedMeshCount, plateTransformsIdentity,
                 thumbnailPath, archived3mfPath, rawPayload,
+                archivedGcodePath, gcodeMd5, taskName, inputFilenameBase,
                 createdAt
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (printerId, sdcpJobId) DO NOTHING
             """,
             (
@@ -135,6 +136,10 @@ def insert_event(db: DbFactory, event: dict[str, Any]) -> int | None:
                 event.get("thumbnailPath"),
                 event.get("archived3mfPath"),
                 event.get("rawPayload"),
+                event.get("archivedGcodePath"),
+                event.get("gcodeMd5"),
+                event.get("taskName"),
+                event.get("inputFilenameBase"),
                 int(time.time()),
             ),
         )
@@ -233,9 +238,26 @@ def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
         ),
         "thumbnailPath": row["thumbnailPath"],
         "archived3mfPath": row["archived3mfPath"],
+        "archivedGcodePath": _safe_col(row, "archivedGcodePath"),
+        "gcodeMd5": _safe_col(row, "gcodeMd5"),
+        "taskName": _safe_col(row, "taskName"),
+        "inputFilenameBase": _safe_col(row, "inputFilenameBase"),
         "rawPayloadParsed": parsed_raw,
         "createdAt": row["createdAt"],
     }
+
+
+def _safe_col(row: sqlite3.Row, name: str) -> Any:
+    """Lookup a column that may not exist on an old row factory.
+
+    Belt-and-braces — `ensure_centauri_tables` runs the forward
+    migration at startup, but this guard means a pre-migration unit
+    test or a partial migration won't crash the listing path.
+    """
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
 
 
 # ---------------------------------------------------------------------- reviews

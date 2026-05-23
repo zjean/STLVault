@@ -22,14 +22,22 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 import websockets
 from websockets.asyncio.client import connect as ws_connect
 
-from . import sdcp
+from . import sdcp, gcode_meta
+
+
+# Archive retention: bounded by both count + age. Numbers from the
+# design doc — intersection wins (the smaller-window of the two).
+ARCHIVE_KEEP_COUNT = 50
+ARCHIVE_KEEP_DAYS = 30
 
 log = logging.getLogger(__name__)
 
@@ -93,8 +101,17 @@ class CentauriClient:
       await client.stop()
     """
 
-    def __init__(self, ingest: IngestionCallback) -> None:
+    def __init__(
+        self,
+        ingest: IngestionCallback,
+        *,
+        upload_dir: Path | str | None = None,
+    ) -> None:
         self._ingest = ingest
+        # Archive root for enriched event payloads. When None, archiving
+        # is disabled (the enrichment still extracts metadata, it just
+        # doesn't keep a copy of the gcode).
+        self._upload_dir = Path(upload_dir) if upload_dir else None
         self._printer_ip: str | None = None
         self._mainboard_id: str | None = None
         self._task: asyncio.Task[None] | None = None
@@ -102,6 +119,18 @@ class CentauriClient:
         self._snapshot = PrinterStatusSnapshot()
         self._job: JobState | None = None
         self._restart_event = asyncio.Event()
+        # Active websocket — assigned during _session, cleared on close.
+        # send_request() reaches in here rather than receiving the ws as
+        # an argument so callers (the terminal-transition ingest path)
+        # don't need to know about the connection lifecycle.
+        self._ws = None
+        # RequestID → Future map for in-flight Cmd requests. _handle_frame
+        # resolves a future when the matching RESPONSE frame arrives.
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        # Pending enrichment tasks scheduled from _on_status. Tracked so
+        # stop() can drain them rather than letting them fire-and-forget
+        # into a torn-down event loop.
+        self._enrich_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------ API
 
@@ -121,6 +150,16 @@ class CentauriClient:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
+        # Drain enrichment tasks so we don't lose an event whose
+        # gcode-fetch was mid-flight when the user hit Ctrl+C.
+        # Bounded wait — anything still in-flight after 3s gets dropped,
+        # the event will reappear via the printer's history reconcile.
+        if self._enrich_tasks:
+            with contextlib.suppress(asyncio.TimeoutError, Exception):
+                await asyncio.wait_for(
+                    asyncio.gather(*self._enrich_tasks, return_exceptions=True),
+                    timeout=3.0,
+                )
 
     async def set_printer_ip(self, ip: str | None) -> None:
         """Update the configured IP and bounce the connection.
@@ -257,6 +296,10 @@ class CentauriClient:
             ws_connect(url, max_size=None), timeout=DEFAULT_CONNECT_TIMEOUT
         ) as ws:
             now = int(time.time())
+            # Expose the live ws to send_request(). Cleared on the way
+            # out so post-disconnect callers fail closed rather than
+            # writing into a torn-down connection.
+            self._ws = ws
             self._snapshot = PrinterStatusSnapshot(
                 connected=True,
                 printer_ip=host,
@@ -360,6 +403,14 @@ class CentauriClient:
                 restart_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await restart_task
+                # Tear down the connection-scoped state so a later
+                # send_request() against a dead ws fails fast instead of
+                # awaiting a future that nothing will ever resolve.
+                self._ws = None
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.cancel()
+                self._pending.clear()
 
     def _handle_frame(self, raw: Any) -> None:
         msg = sdcp.parse_message(raw)
@@ -382,8 +433,58 @@ class CentauriClient:
             self._mainboard_id = msg.mainboard_id
             self._snapshot.mainboard_id = msg.mainboard_id
 
+        # Dispatch RESPONSE frames to waiters. We let frames flow through
+        # to the rest of the handler too in case the printer ever bundles
+        # state changes with a response (it doesn't today, but the parser
+        # is defensive).
+        if (
+            msg.type == sdcp.MessageType.RESPONSE
+            and msg.request_id
+            and msg.request_id in self._pending
+        ):
+            fut = self._pending.pop(msg.request_id)
+            if not fut.done():
+                fut.set_result(msg.raw)
+
         if msg.type == sdcp.MessageType.STATUS and msg.status is not None:
             self._on_status(msg.status)
+
+    async def send_request(
+        self,
+        cmd: int,
+        data: dict[str, Any] | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> dict[str, Any] | None:
+        """Send an SDCP request and await its matching RESPONSE frame.
+
+        Returns the full response envelope, or None if we're not
+        connected, the mainboard ID isn't known yet, or the printer
+        didn't answer within `timeout`. Never raises — callers are
+        expected to treat enrichment as best-effort.
+        """
+        if self._ws is None or self._mainboard_id is None:
+            return None
+        request_id = sdcp._new_request_id()
+        pkt = sdcp.build_request(cmd, data, self._mainboard_id, request_id=request_id)
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending[request_id] = fut
+        try:
+            await self._ws.send(sdcp.encode(pkt))
+        except Exception:  # noqa: BLE001
+            self._pending.pop(request_id, None)
+            log.exception("centauri: send_request send failed (cmd=%s)", cmd)
+            return None
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending.pop(request_id, None)
+            log.warning("centauri: send_request timeout (cmd=%s)", cmd)
+            return None
+        except Exception:  # noqa: BLE001
+            self._pending.pop(request_id, None)
+            return None
 
     def _on_status(self, status_payload: dict[str, Any]) -> None:
         """Drive the per-job state machine off PrintInfo.Status transitions."""
@@ -451,11 +552,150 @@ class CentauriClient:
                 "rawPayload": json.dumps(status_payload),
             }
             log.info(
-                "centauri: job %s ended (%s) — emitting event",
+                "centauri: job %s ended (%s) — scheduling enrichment",
                 job.task_id,
                 outcome,
             )
+            # Don't block the read loop. Spawn enrichment; it'll emit
+            # the event when (or whether) enrichment succeeds.
+            self._spawn_enrichment(event, job.task_id)
+
+    def _spawn_enrichment(self, event: dict[str, Any], task_id: str) -> None:
+        """Fork a background task that enriches + ingests the event.
+
+        Tracked in `_enrich_tasks` so stop() can wait on outstanding
+        enrichment before tearing the loop down.
+        """
+        loop = asyncio.get_running_loop()
+        t = loop.create_task(
+            self._enrich_and_ingest(event, task_id),
+            name=f"centauri-enrich-{task_id}",
+        )
+        self._enrich_tasks.add(t)
+        t.add_done_callback(self._enrich_tasks.discard)
+
+    async def _enrich_and_ingest(self, event: dict[str, Any], task_id: str) -> None:
+        """Best-effort enrichment path.
+
+        Step 1: Cmd 321 → printer-side TaskName + MD5 + plate info.
+        Step 2: HTTP GET the gcode by TaskName.
+        Step 3: Parse OrcaSlicer header → filament weight, time,
+                input_filename_base.
+        Step 4: Archive the gcode under
+                ${UPLOAD_DIR}/centauri/<printer>/<startedAt>_<task>.gcode
+                and prune the per-printer directory to the retention
+                window.
+        Step 5: Merge fields into the event dict and call self._ingest.
+
+        Any step can fail. On failure the event is still emitted with
+        whatever enrichment we managed (potentially none) — keeping the
+        inbox correct is more important than the filament-weight badge.
+        """
+        # Step 1 — Cmd 321
+        task_name: str | None = None
+        printer_md5: str | None = None
+        try:
+            resp = await self.send_request(
+                int(sdcp.Cmd.GET_HISTORY_TASK_DETAIL),
+                {"Id": [task_id]},
+                timeout=4.0,
+            )
+            if resp:
+                inner = resp.get("Data", {}).get("Data", {}) if isinstance(resp, dict) else {}
+                details = inner.get("HistoryDetailList") if isinstance(inner, dict) else None
+                if isinstance(details, list) and details:
+                    d = details[0]
+                    if isinstance(d, dict):
+                        tn = d.get("TaskName")
+                        if isinstance(tn, str):
+                            task_name = tn
+                        m = d.get("MD5")
+                        if isinstance(m, str):
+                            printer_md5 = m
+        except Exception:  # noqa: BLE001
+            log.exception("centauri: Cmd 321 failed for task %s", task_id)
+
+        # Step 2 — HTTP fetch
+        gcode_text: str | None = None
+        if task_name and self._printer_ip:
+            gcode_text = await gcode_meta.fetch(self._printer_ip, task_name)
+
+        # Step 3 — parse
+        parsed: dict[str, Any] = {}
+        if gcode_text:
+            leaf = os.path.basename(task_name) if task_name else None
+            parsed = gcode_meta.parse(gcode_text, filename=leaf)
+
+        # Step 4 — archive + prune
+        archived_path: str | None = None
+        if gcode_text and self._upload_dir is not None:
             try:
-                self._ingest(event)
+                archived_path = await asyncio.to_thread(
+                    self._archive_gcode,
+                    gcode_text,
+                    event["printerId"],
+                    event["startedAt"],
+                    task_id,
+                )
             except Exception:  # noqa: BLE001
-                log.exception("centauri: ingest callback failed")
+                log.exception("centauri: gcode archive failed for task %s", task_id)
+
+        # Step 5 — merge + emit. We deliberately don't overwrite the
+        # estTimeMin we already got from the live Status payload — that
+        # one matches the runtime clock used elsewhere in the UI. Use
+        # the parsed value only as a fallback.
+        if parsed.get("estFilamentG") is not None:
+            event["estFilamentG"] = parsed["estFilamentG"]
+        if event.get("estTimeMin") is None and parsed.get("estTimeMin") is not None:
+            event["estTimeMin"] = parsed["estTimeMin"]
+        if archived_path:
+            event["archivedGcodePath"] = archived_path
+        if printer_md5:
+            event["gcodeMd5"] = printer_md5
+        if task_name:
+            event["taskName"] = task_name
+        if parsed.get("inputFilenameBase"):
+            event["inputFilenameBase"] = parsed["inputFilenameBase"]
+
+        try:
+            self._ingest(event)
+        except Exception:  # noqa: BLE001
+            log.exception("centauri: ingest callback failed")
+
+    def _archive_gcode(
+        self,
+        text: str,
+        printer_id: str,
+        started_at: int,
+        task_id: str,
+    ) -> str:
+        """Write the gcode under the per-printer archive dir, then prune.
+
+        Returns the absolute path. Pruning enforces the design's
+        intersection of `keep at most N` and `prune older than D days`.
+        Runs in a worker thread (called via asyncio.to_thread) — this is
+        the only filesystem work in the enrichment path.
+        """
+        assert self._upload_dir is not None  # caller guards
+        dest_dir = self._upload_dir / "centauri" / printer_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        # Filename uses startedAt + a 12-char task prefix — sortable +
+        # short enough to glance at, with the task_id appended so
+        # operators can grep prints to disk artefacts.
+        leaf = f"{started_at}_{task_id[:12]}.gcode"
+        path = dest_dir / leaf
+        path.write_text(text, encoding="utf-8", errors="replace")
+
+        # Prune. Sort by mtime descending; keep first N, drop those
+        # older than the cutoff anyway.
+        cutoff = time.time() - ARCHIVE_KEEP_DAYS * 86400
+        entries = sorted(
+            (p for p in dest_dir.glob("*.gcode") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for i, p in enumerate(entries):
+            if i >= ARCHIVE_KEEP_COUNT or p.stat().st_mtime < cutoff:
+                with contextlib.suppress(OSError):
+                    p.unlink()
+        return str(path)
