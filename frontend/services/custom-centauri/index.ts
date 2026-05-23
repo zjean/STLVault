@@ -196,7 +196,7 @@ export const centauriApi = {
     );
   },
 
-  async listRecentAutoMatched(hours = 24): Promise<PrintEventWithCandidates[]> {
+  async listRecentAutoMatched(hours = 168): Promise<PrintEventWithCandidates[]> {
     const params = new URLSearchParams();
     params.set("hours", String(hours));
     return jsonOrThrow(
