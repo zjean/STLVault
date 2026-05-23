@@ -360,6 +360,22 @@ def list_recent_auto(hours: int = 168) -> list[dict[str, Any]]:
     return events
 
 
+@router.get("/auto-matched-models")
+def list_auto_matched_models(hours: int = 168) -> dict[str, int]:
+    """Map `modelId → most-recent autoMatchedAt (unix seconds)` for the
+    Recent view's chip.
+
+    Empty when Spoolman/Centauri haven't auto-confirmed anything inside
+    the window — frontend treats absence as "no chip", failure as the
+    same (best-effort). Clamps the window to `[1h, 7d]` to match the
+    inbox panel's undo horizon (`UNDO_WINDOW_SECONDS`).
+    """
+    hrs = max(1, min(int(hours), 168))
+    return repo.list_recently_auto_matched_models(
+        _db, since_seconds=hrs * 3600
+    )
+
+
 @router.get("/events/{event_id}")
 def get_event(event_id: int) -> dict[str, Any]:
     ev = repo.get_event(_db, event_id)

@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
-import { Menu as MenuIcon, ChevronLeft, FileBox, Clock } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Menu as MenuIcon, ChevronLeft, FileBox, Clock, Zap } from "lucide-react";
 import { STLModel } from "../types";
+import { centauriApi } from "../services/custom-centauri";
 
 interface RecentViewProps {
   models: STLModel[];
@@ -59,6 +60,27 @@ const RecentView: React.FC<RecentViewProps> = ({
   onOpenMobileSidebar,
   onBack,
 }) => {
+  // `modelId → unix-seconds of last auto-match` inside the 7-day window.
+  // Best-effort fetch — Spoolman/Centauri may be off; the chip just
+  // doesn't render in that case. Refreshed once per mount; we don't
+  // bother with SSE here because the user won't sit on Recent
+  // long-enough that a missing chip changes behaviour.
+  const [autoMatched, setAutoMatched] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    centauriApi
+      .listAutoMatchedModels()
+      .then((map) => {
+        if (!cancelled) setAutoMatched(map);
+      })
+      .catch(() => {
+        // Silent — best-effort; no chips is the right fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const stats = useMemo(() => {
     const now = new Date();
     const today0 = startOfDay(now).getTime();
@@ -242,6 +264,7 @@ const RecentView: React.FC<RecentViewProps> = ({
                       <RecentRow
                         key={m.id}
                         model={m}
+                        autoMatchedAt={autoMatched[m.id]}
                         onOpen={() => onOpenModel(m)}
                       />
                     ))}
@@ -256,10 +279,20 @@ const RecentView: React.FC<RecentViewProps> = ({
   );
 };
 
-const RecentRow: React.FC<{ model: STLModel; onOpen: () => void }> = ({
-  model,
-  onOpen,
-}) => {
+const fmtAgo = (unixSeconds: number): string => {
+  const minutes = Math.max(1, Math.floor((Date.now() / 1000 - unixSeconds) / 60));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
+
+const RecentRow: React.FC<{
+  model: STLModel;
+  autoMatchedAt?: number;
+  onOpen: () => void;
+}> = ({ model, autoMatchedAt, onOpen }) => {
   const ext = extOf(model.name);
   return (
     <div
@@ -292,8 +325,16 @@ const RecentRow: React.FC<{ model: STLModel; onOpen: () => void }> = ({
         )}
       </div>
       <div className="min-w-0">
-        <div className="text-[13.5px] font-medium text-fg truncate">
-          {model.name}
+        <div className="text-[13.5px] font-medium text-fg truncate flex items-center gap-2">
+          <span className="truncate">{model.name}</span>
+          {autoMatchedAt && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-pill bg-accent/15 text-accent text-[10.5px] font-medium flex-shrink-0"
+              title={`Centauri auto-matched a print to this model ${fmtAgo(autoMatchedAt)}. Open the Print Inbox to undo within 7 days.`}
+            >
+              <Zap size={9} /> Auto-matched
+            </span>
+          )}
         </div>
         <div className="font-mono text-[11px] text-fg-3 flex items-center gap-2">
           <span>{formatSize(model.size)}</span>

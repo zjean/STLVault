@@ -510,6 +510,40 @@ def clear_review(db: DbFactory, event_id: int) -> bool:
         conn.close()
 
 
+def list_recently_auto_matched_models(
+    db: DbFactory, *, since_seconds: int
+) -> dict[str, int]:
+    """Map `modelId → most-recent reviewedAt (unix seconds)` for prints the
+    ingest path auto-confirmed inside the window.
+
+    Powers the Recent view's "auto-matched" chip — by returning a flat
+    map keyed by model id, the frontend can decorate model rows in O(1)
+    without per-row API calls.
+
+    Window: the same 7-day undo horizon as the inbox's auto-matched
+    panel, by default — the chip's user value is "this got logged
+    without me touching it, recently", which expires at the same time
+    the undo affordance does.
+    """
+    cutoff = int(time.time()) - max(1, int(since_seconds))
+    conn = db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT resultingModelId AS modelId, MAX(reviewedAt) AS lastAutoAt
+            FROM centauri_review
+            WHERE action = 'auto'
+              AND resultingModelId IS NOT NULL
+              AND reviewedAt >= ?
+            GROUP BY resultingModelId
+            """,
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row["modelId"]: int(row["lastAutoAt"]) for row in rows}
+
+
 def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
     """Flip reserves older than `max_age_days` to dismiss with audit reason.
 

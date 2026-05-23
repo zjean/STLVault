@@ -210,6 +210,18 @@ export const centauriApi = {
     );
   },
 
+  // Map `modelId → autoMatchedAt (unix seconds)` for the Recent view.
+  // Empty object when nothing auto-matched in the window or when the
+  // backend has no centauri data yet. Best-effort: callers should treat
+  // any error as "no chips" rather than surfacing the failure.
+  async listAutoMatchedModels(hours = 168): Promise<Record<string, number>> {
+    const params = new URLSearchParams();
+    params.set("hours", String(hours));
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/auto-matched-models?${params}`),
+    );
+  },
+
   async listRecentAutoMatched(hours = 168): Promise<PrintEventWithCandidates[]> {
     const params = new URLSearchParams();
     params.set("hours", String(hours));
