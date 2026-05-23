@@ -192,13 +192,20 @@ export const centauriApi = {
   async review(
     eventId: number,
     action: "confirm" | "dismiss" | "reserve",
-    opts: { modelId?: string; reason?: string } = {},
+    opts: { modelId?: string; reason?: string; spoolId?: number | null } = {},
   ): Promise<PrintReview> {
+    // Strip explicit nulls so the server-side `int | None = None` default
+    // applies cleanly — sending `"spoolId": null` works either way but
+    // shrinks the payload and keeps the network panel tidy.
+    const body: Record<string, unknown> = { action };
+    if (opts.modelId) body.modelId = opts.modelId;
+    if (opts.reason) body.reason = opts.reason;
+    if (opts.spoolId != null) body.spoolId = opts.spoolId;
     return jsonOrThrow(
       await fetch(`${apiBase()}/centauri/events/${eventId}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, ...opts }),
+        body: JSON.stringify(body),
       }),
     );
   },

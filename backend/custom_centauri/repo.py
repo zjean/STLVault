@@ -542,7 +542,11 @@ def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
 
 
 def create_print_log_from_event(
-    db: DbFactory, event: dict[str, Any], model_id: str
+    db: DbFactory,
+    event: dict[str, Any],
+    model_id: str,
+    *,
+    spool_id: int | None = None,
 ) -> str:
     """Write a `custom_prints` row for a confirmed event.
 
@@ -552,9 +556,12 @@ def create_print_log_from_event(
       'failed'    → 'failed'     (red X)
       'cancelled' → 'cancelled'  (grey slash — fallback branch in the UI
                                   IIFE, intentional)
-    Timing comes from the event; no filament rows yet (file-derived,
-    deferred to Phase 2 with .gcode.3mf parsing). The user can fill in
-    filament manually via the existing editor.
+    Timing comes from the event. Filament rows:
+      - spool_id=None   → no filament row (legacy / auto-confirm path)
+      - spool_id=<int>  → one custom_print_filaments row pinning this
+                          print to that spool, with estWeightG seeded
+                          from `event.estFilamentG` if known. The user
+                          can later resync to deduct against Spoolman.
     """
     print_id = str(uuid.uuid4())
     now = int(time.time())
@@ -587,6 +594,28 @@ def create_print_log_from_event(
                 event["id"],
             ),
         )
+        if spool_id is not None:
+            # Label / colour are unknown at this layer (we'd have to hit
+            # Spoolman from inside the repo, which crosses an architectural
+            # boundary). Leave them NULL; the row UI falls back to
+            # "Spool #N" until the next /api/spoolman/spools refresh
+            # backfills the snapshot, and the existing resync path will
+            # populate them on first deduction.
+            conn.execute(
+                """
+                INSERT INTO custom_print_filaments
+                    (id, printId, spoolId, estWeightG, usedWeightG,
+                     estLengthMm, usedLengthMm, spoolLabel, filamentColor,
+                     consumedAt)
+                VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    print_id,
+                    spool_id,
+                    event.get("estFilamentG"),
+                ),
+            )
         conn.commit()
     finally:
         conn.close()

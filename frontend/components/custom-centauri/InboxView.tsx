@@ -21,6 +21,7 @@ import {
   MatchCandidate,
   PrintEventWithCandidates,
 } from "../../services/custom-centauri";
+import { spoolmanApi, type SpoolSummary } from "../../services/custom-spoolman";
 import { STLModel } from "../../types";
 
 interface InboxViewProps {
@@ -126,10 +127,14 @@ const InboxView: React.FC<InboxViewProps> = ({
     });
   };
 
-  const handleConfirm = async (eventId: number, modelId: string) => {
+  const handleConfirm = async (
+    eventId: number,
+    modelId: string,
+    spoolId?: number | null,
+  ) => {
     setBusy(eventId, true);
     try {
-      await centauriApi.review(eventId, "confirm", { modelId });
+      await centauriApi.review(eventId, "confirm", { modelId, spoolId });
       setPickerOpenFor(null);
       await refresh();
     } catch (e) {
@@ -294,7 +299,9 @@ const InboxView: React.FC<InboxViewProps> = ({
           models={models}
           busy={busyIds.has(pickerOpenFor.id)}
           onCancel={() => setPickerOpenFor(null)}
-          onPick={(modelId) => void handleConfirm(pickerOpenFor.id, modelId)}
+          onPick={(modelId, spoolId) =>
+            void handleConfirm(pickerOpenFor.id, modelId, spoolId)
+          }
         />
       )}
     </div>
@@ -494,9 +501,39 @@ const ModelPicker: React.FC<{
   models: STLModel[];
   busy: boolean;
   onCancel: () => void;
-  onPick: (modelId: string) => void;
+  onPick: (modelId: string, spoolId: number | null) => void;
 }> = ({ event, models, busy, onCancel, onPick }) => {
   const [query, setQuery] = useState("");
+  const [spoolId, setSpoolId] = useState<number | null>(null);
+  const [spools, setSpools] = useState<SpoolSummary[] | null>(null);
+  const [spoolsError, setSpoolsError] = useState<string | null>(null);
+
+  // Spools load lazily — Spoolman might not be configured. Failure is
+  // non-fatal: the picker still works, the dropdown is just absent.
+  useEffect(() => {
+    let cancelled = false;
+    spoolmanApi
+      .listSpools()
+      .then((list) => {
+        if (cancelled) return;
+        // Hide archived spools and any with zero remaining weight — same
+        // shape as LogPrintDialog's reasonable-spool list.
+        const visible = list.filter(
+          (s) =>
+            !s.archived &&
+            (s.remainingWeight == null || s.remainingWeight > 0),
+        );
+        setSpools(visible);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSpoolsError(e instanceof Error ? e.message : "Spools unavailable");
+        setSpools([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -505,6 +542,21 @@ const ModelPicker: React.FC<{
       : [...models].sort((a, b) => b.dateAdded - a.dateAdded);
     return base.slice(0, 50);
   }, [models, query]);
+
+  // Group spools by material so the dropdown is easier to scan when the
+  // user has multiple colours of PLA loaded.
+  const spoolsByMaterial = useMemo(() => {
+    const groups = new Map<string, SpoolSummary[]>();
+    for (const s of spools ?? []) {
+      const key = s.material ?? "Other";
+      const arr = groups.get(key);
+      if (arr) arr.push(s);
+      else groups.set(key, [s]);
+    }
+    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [spools]);
+
+  const showSpoolPicker = spools !== null && spools.length > 0;
 
   return (
     <div
@@ -536,7 +588,7 @@ const ModelPicker: React.FC<{
           </button>
         </div>
 
-        <div className="px-5 py-3 border-b border-border-soft">
+        <div className="px-5 py-3 border-b border-border-soft flex flex-col gap-2.5">
           <div className="relative">
             <Search
               size={14}
@@ -551,6 +603,39 @@ const ModelPicker: React.FC<{
               className="w-full bg-bg-3 border border-border-soft rounded-md pl-9 pr-3 py-2 text-[13px] text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-3"
             />
           </div>
+
+          {showSpoolPicker && (
+            <label className="flex items-center gap-2 text-[12px] text-fg-3">
+              <span className="flex-shrink-0">Spool (optional):</span>
+              <select
+                value={spoolId ?? ""}
+                onChange={(e) =>
+                  setSpoolId(e.target.value ? Number(e.target.value) : null)
+                }
+                disabled={busy}
+                className="flex-1 min-w-0 bg-bg-3 border border-border-soft rounded-md px-2 py-1.5 text-[12.5px] text-fg outline-none focus:border-accent transition-colors disabled:opacity-50"
+              >
+                <option value="">— None (log without spool) —</option>
+                {spoolsByMaterial.map(([material, list]) => (
+                  <optgroup key={material} label={material}>
+                    {list.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                        {s.remainingWeight != null
+                          ? ` — ${Math.round(s.remainingWeight)}g left`
+                          : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          )}
+          {spoolsError && (
+            <p className="text-[11.5px] text-fg-3 m-0">
+              Spools unavailable — pick a model below to log without one.
+            </p>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
@@ -565,7 +650,7 @@ const ModelPicker: React.FC<{
               <li key={m.id}>
                 <button
                   type="button"
-                  onClick={() => onPick(m.id)}
+                  onClick={() => onPick(m.id, spoolId)}
                   disabled={busy}
                   className="w-full px-5 py-2.5 flex items-center gap-3 text-left hover:bg-bg-3 transition-colors disabled:opacity-50"
                 >

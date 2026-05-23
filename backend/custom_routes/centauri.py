@@ -191,6 +191,12 @@ class ReviewIn(BaseModel):
     action: str = Field(pattern=r"^(confirm|dismiss|reserve)$")
     modelId: str | None = None
     reason: str | None = None
+    # Optional spool attribution on the confirm path. When supplied, the
+    # write-through to custom_prints creates a filament row pinning this
+    # print to that spool so Spoolman sync can later deduct against it.
+    # Unset → behaviour as before (print logged with no filament rows;
+    # user can still edit via the existing print row UI).
+    spoolId: int | None = None
 
 
 # --- /status ----------------------------------------------------------------
@@ -510,7 +516,9 @@ def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
             conn.close()
         if row is None:
             raise HTTPException(status_code=404, detail="model not found")
-        print_id = repo.create_print_log_from_event(_db, ev, body.modelId)
+        print_id = repo.create_print_log_from_event(
+            _db, ev, body.modelId, spool_id=body.spoolId
+        )
         review = repo.upsert_review(
             _db,
             event_id,
