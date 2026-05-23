@@ -21,11 +21,11 @@ import time
 from typing import Any, Callable
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from custom_centauri import matcher, repo
+from custom_centauri import gcode3mf_meta, matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
 
@@ -358,6 +358,98 @@ def list_recent_auto(hours: int = 168) -> list[dict[str, Any]]:
         ev["candidates"] = matcher.list_candidates(_db, ev["id"])
         ev["review"] = repo.get_review(_db, ev["id"])
     return events
+
+
+_MAX_GCODE3MF_BYTES = 256 * 1024 * 1024  # 256 MB: tens of MB are typical
+
+
+@router.post("/events/{event_id}/attach-3mf")
+async def attach_3mf(event_id: int, file: UploadFile = File(...)):
+    """Accept the slicer's `.gcode.3mf` and re-run matching with it.
+
+    Persists the archive under `${FILE_STORAGE}/centauri/<printer>/3mf/`,
+    extracts every mesh-like inner file's MD5 into `centauri_event_mesh`,
+    fills the plate / mesh / transforms metadata onto the event row, then
+    re-runs the matcher so the source-hash signal lights up. Publishes
+    SSE `event.reviewed` (close-enough channel — the inbox just refreshes
+    on any of new/reviewed/auto/updated) so the card re-renders without
+    a poll.
+    """
+    import os
+    from pathlib import Path
+
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    # Read the upload up-front. UploadFile streams from a SpooledTemporaryFile;
+    # we want a single byte blob for parser + hash + persistence.
+    blob = await file.read(_MAX_GCODE3MF_BYTES + 1)
+    if len(blob) > _MAX_GCODE3MF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (limit {_MAX_GCODE3MF_BYTES} bytes)",
+        )
+    if not blob:
+        raise HTTPException(status_code=400, detail="empty upload")
+
+    meta = gcode3mf_meta.parse(blob)
+    if meta.is_empty():
+        # We accept the archive even when the parser came up empty — the
+        # user did attach SOMETHING, and a future create-from-print can
+        # still serve the file back. Just log loudly.
+        log.info(
+            "centauri attach-3mf: parser found no plates/meshes for event %s",
+            event_id,
+        )
+
+    # Persist under the same per-printer tree as Phase-2.2's gcode archive.
+    upload_root = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    dest_dir = upload_root / "centauri" / str(ev["printerId"]) / "3mf"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    leaf = f"{ev['startedAt']}_{str(ev['sdcpJobId'])[:12]}.gcode.3mf"
+    archived_path = dest_dir / leaf
+    archived_path.write_bytes(blob)
+
+    repo.set_event_archived_3mf(
+        _db,
+        event_id,
+        archived_path=str(archived_path),
+        plate_count=meta.plate_count if meta.plate_count else None,
+        embedded_mesh_count=meta.embedded_mesh_count if meta.embedded_mesh_count else None,
+        transforms_identity=(
+            None
+            if meta.transforms_identity is None
+            else int(meta.transforms_identity)
+        ),
+    )
+
+    mesh_count = repo.replace_event_meshes(
+        _db,
+        event_id,
+        [
+            {"zipPath": m.zip_path, "md5": m.md5, "sizeBytes": m.size}
+            for m in meta.meshes
+        ],
+    )
+
+    # Re-run the matcher with the freshly-attached mesh data. We pass the
+    # updated event dict so the source_hash signal can read the meshes
+    # back via the repo (rather than threading them through the call).
+    fresh_event = repo.get_event(_db, event_id) or ev
+    matcher.run_all_signals(_db, event_id, fresh_event)
+
+    _publish({"type": "event.reviewed", "eventId": event_id, "action": "attached-3mf"})
+
+    return {
+        "eventId": event_id,
+        "archivedPath": str(archived_path),
+        "wholeFileMd5": meta.whole_file_md5,
+        "plateCount": meta.plate_count,
+        "embeddedMeshCount": meta.embedded_mesh_count,
+        "transformsIdentity": meta.transforms_identity,
+        "meshCount": mesh_count,
+    }
 
 
 @router.get("/auto-matched-models")

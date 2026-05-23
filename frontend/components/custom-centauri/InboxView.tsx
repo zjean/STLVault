@@ -14,6 +14,8 @@ import {
   Weight,
   Zap,
   Undo2,
+  FileBox,
+  Paperclip,
 } from "lucide-react";
 import {
   centauriApi,
@@ -180,6 +182,20 @@ const InboxView: React.FC<InboxViewProps> = ({
     }
   };
 
+  const handleAttach3mf = async (eventId: number, file: File) => {
+    setBusy(eventId, true);
+    try {
+      await centauriApi.attach3mf(eventId, file);
+      await refresh();
+    } catch (e) {
+      setLoadError(
+        e instanceof Error ? e.message : "Attaching .gcode.3mf failed",
+      );
+    } finally {
+      setBusy(eventId, false);
+    }
+  };
+
   const isEmpty = events !== null && events.length === 0;
 
   return (
@@ -264,6 +280,7 @@ const InboxView: React.FC<InboxViewProps> = ({
                   onPickModel={() => setPickerOpenFor(ev)}
                   onDismiss={() => void handleDismiss(ev.id)}
                   onReserve={() => void handleReserve(ev.id)}
+                  onAttach3mf={(file) => void handleAttach3mf(ev.id, file)}
                 />
               ))}
             </div>
@@ -325,18 +342,54 @@ const EventCard: React.FC<{
   onPickModel: () => void;
   onDismiss: () => void;
   onReserve: () => void;
-}> = ({ event, busy, onConfirm, onPickModel, onDismiss, onReserve }) => {
+  onAttach3mf: (file: File) => void;
+}> = ({
+  event,
+  busy,
+  onConfirm,
+  onPickModel,
+  onDismiss,
+  onReserve,
+  onAttach3mf,
+}) => {
   const [thumbErrored, setThumbErrored] = useState(false);
+  const [isDragHover, setIsDragHover] = useState(false);
   const candidates = event.candidates ?? [];
   const topCandidate = candidates[0] as MatchCandidate | undefined;
   const isReserved = event.review?.action === "reserve";
+  const has3mf = !!event.archived3mfPath;
+
+  // Drag-and-drop a `.gcode.3mf` onto the card. Accepts the first file
+  // ending in .gcode.3mf or .3mf (some slicers ship the latter as the
+  // canonical export). Suppresses defaults so the browser doesn't try
+  // to navigate to the dropped file.
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragHover(false);
+    if (busy) return;
+    const file = Array.from(e.dataTransfer.files).find((f) =>
+      /\.(gcode\.3mf|3mf)$/i.test(f.name),
+    );
+    if (file) onAttach3mf(file);
+  };
+  const handleDragOver = (e: React.DragEvent) => {
+    if (busy) return;
+    e.preventDefault();
+    setIsDragHover(true);
+  };
+  const handleDragLeave = () => setIsDragHover(false);
 
   return (
     <article
-      className={`rounded-card border bg-surface p-3.5 flex gap-4 ${
-        isReserved
-          ? "border-accent/40 border-l-[3px] border-l-accent"
-          : "border-border-soft"
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      className={`rounded-card border bg-surface p-3.5 flex gap-4 transition-colors ${
+        isDragHover
+          ? "border-accent border-l-[3px] border-l-accent bg-accent/5"
+          : isReserved
+            ? "border-accent/40 border-l-[3px] border-l-accent"
+            : "border-border-soft"
       }`}
     >
       <div className="w-[120px] h-[120px] flex-shrink-0 rounded-[10px] bg-bg-3 overflow-hidden grid place-items-center">
@@ -487,6 +540,28 @@ const EventCard: React.FC<{
             <span className="inline-flex items-center gap-1 text-[11px] text-danger ml-1">
               <AlertTriangle size={11} /> Print errored — log anyway?
             </span>
+          )}
+        </div>
+
+        {/* Phase-4 drop hint — explains the card-wide drop target and
+            reflects whether a .gcode.3mf is already attached. */}
+        <div className="mt-1.5 pt-1.5 border-t border-border-soft text-[11px] text-fg-3 flex items-center gap-1.5">
+          {has3mf ? (
+            <>
+              <Paperclip size={11} className="text-accent" />
+              <span>
+                <span className="text-accent font-medium">Slicer file attached</span>
+                {" — "}drop a new <span className="font-mono">.gcode.3mf</span> to replace.
+              </span>
+            </>
+          ) : (
+            <>
+              <FileBox size={11} />
+              <span>
+                Drop the slicer's <span className="font-mono">.gcode.3mf</span> for this print
+                here to enable source-hash matching and "Create from this print".
+              </span>
+            </>
           )}
         </div>
       </div>
