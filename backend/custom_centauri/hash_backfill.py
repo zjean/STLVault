@@ -74,18 +74,21 @@ def backfill_all(db: DbFactory, upload_dir: Path) -> dict:
             stats["missing_file"] += 1
             continue
 
-        try:
-            blob = path.read_bytes()
-        except OSError as e:
-            log.warning("hash_backfill: read failed for %s (%s)", path, e)
-            stats["errors"] += 1
-            continue
-
-        source_md5 = hashlib.md5(blob, usedforsecurity=False).hexdigest()
+        is_3mf_family = path.name.lower().endswith((".3mf", ".gcode.3mf"))
         embedded_md5: str | None = None
-        # Parse embedded mesh hash for 3mf-family sources. Plain .stl
-        # sources ARE the mesh, so `embeddedMd5` adds no information.
-        if path.name.lower().endswith((".3mf", ".gcode.3mf")):
+        # 3mf-family sources need the whole blob in memory because the
+        # parser constructs an io.BytesIO over it. Plain .stl (the common
+        # case, and the one most likely to be large — high-poly miniatures
+        # routinely hit 100+ MB) gets streamed in 1 MB chunks so the MD5
+        # doesn't hold the whole file in memory.
+        if is_3mf_family:
+            try:
+                blob = path.read_bytes()
+            except OSError as e:
+                log.warning("hash_backfill: read failed for %s (%s)", path, e)
+                stats["errors"] += 1
+                continue
+            source_md5 = hashlib.md5(blob, usedforsecurity=False).hexdigest()
             try:
                 meta = gcode3mf_meta.parse(blob)
                 if meta.meshes:
@@ -95,6 +98,17 @@ def backfill_all(db: DbFactory, upload_dir: Path) -> dict:
                 log.exception(
                     "hash_backfill: gcode3mf parse failed for %s", path
                 )
+        else:
+            md5 = hashlib.md5(usedforsecurity=False)
+            try:
+                with path.open("rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        md5.update(chunk)
+            except OSError as e:
+                log.warning("hash_backfill: read failed for %s (%s)", path, e)
+                stats["errors"] += 1
+                continue
+            source_md5 = md5.hexdigest()
 
         conn = db()
         try:

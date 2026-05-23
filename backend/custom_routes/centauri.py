@@ -15,14 +15,21 @@ URL prefix `/api/centauri` makes the fork-only surface obvious.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
+import re
+import shutil
+import sqlite3
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from custom_centauri import gcode3mf_meta, hash_backfill, matcher, repo
@@ -41,6 +48,10 @@ _client: CentauriClient | None = None
 # In-process broadcast bus for SSE subscribers. Each subscriber gets a queue;
 # publishers fan-out by iterating. List instead of set so order is stable.
 _subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+# Counts ingest-callback failures since process start. Surfaced on
+# /api/centauri/status so a "events disappear silently" symptom has a
+# visible cause. Bumped from inside the make_ingest_callback closure.
+_ingest_failure_count: int = 0
 
 
 def configure(*, db_conn_factory: Callable[..., Any], client: CentauriClient) -> None:
@@ -80,12 +91,15 @@ def make_ingest_callback() -> Callable[[dict[str, Any]], None]:
     """
 
     def _ingest(event: dict[str, Any]) -> None:
+        global _ingest_failure_count
         if _db_conn_factory is None:
+            _ingest_failure_count += 1
             log.warning("centauri ingest: db factory not configured, dropping event")
             return
         try:
             row_id = repo.insert_event(_db_conn_factory, event)
         except Exception:  # noqa: BLE001
+            _ingest_failure_count += 1
             log.exception("centauri ingest: insert failed")
             return
         if row_id is None:
@@ -237,6 +251,10 @@ def get_status() -> dict[str, Any]:
         "currentFilename": snap.current_filename,
         "currentProgress": snap.current_progress,
         "currentTaskId": snap.current_task_id,
+        # Cumulative since process start. Non-zero means at least one
+        # printer-side event was lost — check logs for the matching
+        # `centauri ingest: insert failed` traceback.
+        "ingestFailureCount": _ingest_failure_count,
     }
 
 
@@ -396,9 +414,6 @@ async def attach_3mf(event_id: int, file: UploadFile = File(...)):
     on any of new/reviewed/auto/updated) so the card re-renders without
     a poll.
     """
-    import os
-    from pathlib import Path
-
     ev = repo.get_event(_db, event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="event not found")
@@ -489,21 +504,32 @@ _PRINT_INBOX_FOLDER_NAME = "Print Inbox"
 def _get_or_create_print_inbox_folder(conn) -> str:
     """Return the id of the singleton 'Print Inbox' folder, creating it
     if absent. Top-level (parentId NULL) so the user can find it
-    alongside their own folders without digging."""
-    import uuid as _uuid
+    alongside their own folders without digging.
 
+    Race-safe: SELECT-then-INSERT would let two concurrent create-model
+    requests both miss and both INSERT a duplicate (upstream's `folders`
+    table has no UNIQUE constraint we can lean on). We use a single
+    `INSERT … WHERE NOT EXISTS` statement instead — SQLite serialises
+    writers, so the second caller's WHERE NOT EXISTS sees the first
+    caller's row and skips the insert. A follow-up SELECT then returns
+    whichever row won.
+    """
+    folder_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO folders(id, name, parentId)
+        SELECT ?, ?, NULL
+        WHERE NOT EXISTS (
+            SELECT 1 FROM folders WHERE name = ? AND parentId IS NULL
+        )
+        """,
+        (folder_id, _PRINT_INBOX_FOLDER_NAME, _PRINT_INBOX_FOLDER_NAME),
+    )
     row = conn.execute(
         "SELECT id FROM folders WHERE name = ? AND parentId IS NULL",
         (_PRINT_INBOX_FOLDER_NAME,),
     ).fetchone()
-    if row is not None:
-        return row["id"]
-    folder_id = str(_uuid.uuid4())
-    conn.execute(
-        "INSERT INTO folders(id,name,parentId) VALUES (?,?,?)",
-        (folder_id, _PRINT_INBOX_FOLDER_NAME, None),
-    )
-    return folder_id
+    return row["id"]
 
 
 @router.post("/events/{event_id}/create-model")
@@ -524,15 +550,6 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
 
     Returns the new model dict in the same shape as POST /api/models/upload.
     """
-    import hashlib
-    import json as _json
-    import os
-    import shutil
-    import sqlite3
-    import time as _time
-    import uuid as _uuid
-    from pathlib import Path
-
     ev = repo.get_event(_db, event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="event not found")
@@ -556,7 +573,7 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
     # Stable name + ext for the new model. We keep .gcode.3mf so the
     # viewer can recognise it (the 3MF body inside is render-able by the
     # existing react-three-fiber pipeline).
-    model_id = str(_uuid.uuid4())
+    model_id = str(uuid.uuid4())
     ext = ".gcode.3mf"
     dest_filename = f"{model_id}{ext}"
     dest_path = upload_root / dest_filename
@@ -570,7 +587,7 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
         ev.get("gcodeFilename") or src_path.name
     )
 
-    now_ms = int(_time.time() * 1000)
+    now_ms = int(time.time() * 1000)
     meshes = repo.list_event_meshes(_db, event_id)
     source_md5 = hashlib.md5(dest_path.read_bytes(), usedforsecurity=False).hexdigest()
     embedded_md5 = meshes[0]["md5"] if meshes else None
@@ -588,7 +605,7 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
                 f"/api/models/{model_id}/download",
                 size,
                 now_ms,
-                _json.dumps(["centauri", "auto-import"]),
+                json.dumps(["centauri", "auto-import"]),
                 f"Created from Centauri print job {ev['sdcpJobId']}",
                 None,  # thumbnail — TODO: write plate_preview_png if we keep it
                 None,
@@ -601,7 +618,7 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
                 (modelId, sourceMd5, embeddedMd5, computedAt)
             VALUES (?, ?, ?, ?)
             """,
-            (model_id, source_md5, embedded_md5, int(_time.time())),
+            (model_id, source_md5, embedded_md5, int(time.time())),
         )
         conn.commit()
     except sqlite3.IntegrityError as e:
@@ -639,17 +656,21 @@ def create_model_from_event(event_id: int) -> dict[str, Any]:
     }
 
 
-_SLICER_PREFIX_RE = __import__("re").compile(
+_SLICER_PREFIX_RE = re.compile(
     # Slicer-output filename shape: <prefix>_<nozzle>_<base>_<materialN.M>_<time>.gcode[.3mf]
+    # Prefix is `ECC` — the only slicer-prefix we have observed from the
+    # Centauri's own OrcaSlicer fork. BBL/PRUSA were speculatively added
+    # earlier with no fixture proving they show up here; drop until a
+    # real example arrives.
     # `<time>` is any combination of `\d+h`, `\d+m`, `\d+s` — observed:
     #   _4h25m         (1h+ print)
     #   _15m45s        (sub-1h, was missed by the old regex)
     #   _45m           (round minutes)
     #   _45s           (very short test print)
     #   _4h25m13s      (full)
-    r"^(?:ECC|BBL|PRUSA)_[\d.]+_(.+?)_(?:[A-Z]+[\d.]+)?(?:_(?:\d+[hms])+)?"
+    r"^ECC_[\d.]+_(.+?)_(?:[A-Z]+[\d.]+)?(?:_(?:\d+[hms])+)?"
     r"(?:\.gcode(?:\.3mf)?)?$",
-    __import__("re").IGNORECASE,
+    re.IGNORECASE,
 )
 
 
@@ -764,10 +785,6 @@ def event_gcode(event_id: int):
     resolves outside the upload root so a poisoned DB column can't read
     arbitrary files.
     """
-    from pathlib import Path
-    from fastapi.responses import FileResponse
-    import os
-
     ev = repo.get_event(_db, event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="event not found")
