@@ -156,15 +156,27 @@ def list_events(
 ) -> list[dict[str, Any]]:
     """List events, newest-first.
 
-    `reviewed=False` returns only events without a review row (the inbox).
-    `reviewed=True` returns only reviewed events (history/audit).
+    `reviewed=False` returns events still actionable from the inbox: no
+    review row, OR a non-terminal review (currently only `action='reserve'`
+    — a user-deferred decision that's awaiting a future upload to link).
+    `reviewed=True` returns terminally-reviewed events (confirm/dismiss/auto).
     `reviewed=None` returns everything.
     """
     where = ""
     if reviewed is True:
-        where = "WHERE EXISTS (SELECT 1 FROM centauri_review WHERE eventId = e.id)"
+        where = (
+            "WHERE EXISTS ("
+            "  SELECT 1 FROM centauri_review WHERE eventId = e.id"
+            "    AND action != 'reserve'"
+            ")"
+        )
     elif reviewed is False:
-        where = "WHERE NOT EXISTS (SELECT 1 FROM centauri_review WHERE eventId = e.id)"
+        where = (
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM centauri_review WHERE eventId = e.id"
+            "    AND action != 'reserve'"
+            ")"
+        )
 
     conn = db()
     try:
@@ -290,15 +302,85 @@ def upsert_review(
 
 
 def count_unreviewed(db: DbFactory) -> int:
+    """Inbox badge count.
+
+    Reserves count as unreviewed — they're a deferred decision, still
+    pending action from the user even though a review row exists.
+    """
     conn = db()
     try:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM centauri_print_event e "
-            "WHERE NOT EXISTS (SELECT 1 FROM centauri_review WHERE eventId = e.id)"
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM centauri_review WHERE eventId = e.id"
+            "    AND action != 'reserve'"
+            ")"
         ).fetchone()
     finally:
         conn.close()
     return int(row["c"]) if row else 0
+
+
+# ---------------------------------------------------------------------- reserves
+
+
+def list_recent_reserves(db: DbFactory, since_days: int = 30) -> list[dict[str, Any]]:
+    """Reserved events newer than `since_days`, newest-first.
+
+    Used by the upload-page post-upload dialog ("Link to a recent print?").
+    Joins event + review so callers get the reserve's age plus the print
+    metadata in one round-trip.
+    """
+    cutoff = int(time.time()) - since_days * 86_400
+    conn = db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT e.*, r.reviewedAt AS reservedAt, r.reason AS reserveReason
+            FROM centauri_print_event e
+            JOIN centauri_review r ON r.eventId = e.id
+            WHERE r.action = 'reserve'
+              AND r.reviewedAt >= ?
+            ORDER BY r.reviewedAt DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ev = _row_to_event(r)
+        ev["reservedAt"] = r["reservedAt"]
+        out.append(ev)
+    return out
+
+
+def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
+    """Flip reserves older than `max_age_days` to dismiss with audit reason.
+
+    Returns the number of rows flipped. Idempotent — only touches rows
+    still at `action='reserve'`. Run on backend startup; the cost is a
+    single indexed scan so we don't need a separate scheduled job.
+    """
+    cutoff = int(time.time()) - max_age_days * 86_400
+    now = int(time.time())
+    conn = db()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE centauri_review
+            SET action = 'dismiss',
+                reason = 'reserve_expired',
+                reviewedAt = ?
+            WHERE action = 'reserve'
+              AND reviewedAt < ?
+            """,
+            (now, cutoff),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
 
 
 # ------------------------------------------- print-log entries (writes for confirm)

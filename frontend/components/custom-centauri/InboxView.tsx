@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   Loader2,
   Printer,
+  Bookmark,
 } from "lucide-react";
 import {
   centauriApi,
@@ -137,6 +138,18 @@ const InboxView: React.FC<InboxViewProps> = ({
     }
   };
 
+  const handleReserve = async (eventId: number) => {
+    setBusy(eventId, true);
+    try {
+      await centauriApi.review(eventId, "reserve");
+      await refresh();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Reserve failed");
+    } finally {
+      setBusy(eventId, false);
+    }
+  };
+
   const isEmpty = events !== null && events.length === 0;
 
   return (
@@ -220,6 +233,7 @@ const InboxView: React.FC<InboxViewProps> = ({
                   onConfirm={(modelId) => void handleConfirm(ev.id, modelId)}
                   onPickModel={() => setPickerOpenFor(ev)}
                   onDismiss={() => void handleDismiss(ev.id)}
+                  onReserve={() => void handleReserve(ev.id)}
                 />
               ))}
             </div>
@@ -256,13 +270,21 @@ const EventCard: React.FC<{
   onConfirm: (modelId: string) => void;
   onPickModel: () => void;
   onDismiss: () => void;
-}> = ({ event, busy, onConfirm, onPickModel, onDismiss }) => {
+  onReserve: () => void;
+}> = ({ event, busy, onConfirm, onPickModel, onDismiss, onReserve }) => {
   const [thumbErrored, setThumbErrored] = useState(false);
   const candidates = event.candidates ?? [];
   const topCandidate = candidates[0] as MatchCandidate | undefined;
+  const isReserved = event.review?.action === "reserve";
 
   return (
-    <article className="rounded-card border border-border-soft bg-surface p-3.5 flex gap-4">
+    <article
+      className={`rounded-card border bg-surface p-3.5 flex gap-4 ${
+        isReserved
+          ? "border-accent/40 border-l-[3px] border-l-accent"
+          : "border-border-soft"
+      }`}
+    >
       <div className="w-[120px] h-[120px] flex-shrink-0 rounded-[10px] bg-bg-3 overflow-hidden grid place-items-center">
         {thumbErrored ? (
           <Printer size={28} className="text-fg-3" />
@@ -291,6 +313,14 @@ const EventCard: React.FC<{
           >
             {event.outcome}
           </span>
+          {isReserved && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-pill bg-accent/15 text-accent"
+              title="Reserved — link from the next upload, or pick a model now."
+            >
+              <Bookmark size={11} /> reserved
+            </span>
+          )}
         </div>
 
         <div className="flex gap-2 flex-wrap text-[11.5px] text-fg-2">
@@ -371,6 +401,17 @@ const EventCard: React.FC<{
             <Check size={13} />{" "}
             {candidates.length === 0 ? "Pick model…" : "Pick a different model…"}
           </button>
+          {!isReserved && (
+            <button
+              type="button"
+              onClick={onReserve}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-surface hover:bg-surface-2 text-[12.5px] text-fg-2 transition-colors disabled:opacity-50"
+              title="Defer this — link it after you upload the model file."
+            >
+              <Bookmark size={13} /> Reserve for upload
+            </button>
+          )}
           <button
             type="button"
             onClick={onDismiss}

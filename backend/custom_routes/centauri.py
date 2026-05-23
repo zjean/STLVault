@@ -123,7 +123,11 @@ class TestConnectionIn(BaseModel):
 
 
 class ReviewIn(BaseModel):
-    action: str = Field(pattern=r"^(confirm|dismiss)$")  # Phase 1 only
+    # 'reserve' is non-terminal — the event stays in the inbox but is
+    # marked "awaiting a future upload to link against" and is also
+    # surfaced on the upload page so the user can complete the link
+    # without re-finding the inbox card.
+    action: str = Field(pattern=r"^(confirm|dismiss|reserve)$")
     modelId: str | None = None
     reason: str | None = None
 
@@ -255,10 +259,14 @@ async def events_stream() -> StreamingResponse:
 @router.get("/events")
 def list_events(reviewed: bool | None = None, limit: int = 100) -> list[dict[str, Any]]:
     events = repo.list_events(_db, reviewed=reviewed, limit=min(max(limit, 1), 500))
-    # Embed candidates per event. List sizes are bounded (≤ a handful per
-    # event), so a single round-trip beats per-event lookups from the UI.
+    # Embed candidates + review per event so the inbox can render the
+    # "Reserved" badge for action='reserve' events without follow-up
+    # fetches. List sizes are bounded (≤ a handful candidates per event,
+    # one review row per event) so a single round-trip beats per-event
+    # lookups from the UI.
     for ev in events:
         ev["candidates"] = matcher.list_candidates(_db, ev["id"])
+        ev["review"] = repo.get_review(_db, ev["id"])
     return events
 
 
@@ -301,6 +309,22 @@ async def event_thumbnail(event_id: int) -> StreamingResponse:
     return StreamingResponse(iter([r.content]), media_type="image/png")
 
 
+@router.get("/reserves")
+def list_reserves(since_days: int = 30) -> list[dict[str, Any]]:
+    """Reserved events newer than `since_days` (default 30).
+
+    Feeds the upload-page "Link to a recent print?" dialog. Each event
+    carries its candidate strip so the frontend can auto-tick reserves
+    that already had a candidate matching the just-uploaded model.
+    """
+    since = max(1, min(int(since_days), 365))
+    events = repo.list_recent_reserves(_db, since_days=since)
+    for ev in events:
+        ev["candidates"] = matcher.list_candidates(_db, ev["id"])
+        ev["review"] = repo.get_review(_db, ev["id"])
+    return events
+
+
 @router.post("/events/{event_id}/review")
 def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
     ev = repo.get_event(_db, event_id)
@@ -336,6 +360,16 @@ def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
             _db,
             event_id,
             action="dismiss",
+            reason=body.reason,
+        )
+    elif body.action == "reserve":
+        # Non-terminal — the event remains visible in the inbox under
+        # "Reserved", and is surfaced again on the upload page so the user
+        # can link a freshly-uploaded model to this print.
+        review = repo.upsert_review(
+            _db,
+            event_id,
+            action="reserve",
             reason=body.reason,
         )
     else:
