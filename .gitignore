@@ -51,3 +51,7 @@ bun.lock
 
 # Local Spoolman dev DB (dev/spoolman/docker-compose.yml)
 /dev/spoolman/data/
+
+# Local git worktrees (native `git worktree` + Claude Code's EnterWorktree tool)
+/.worktrees/
+/.claude/worktrees/
