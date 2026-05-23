@@ -182,17 +182,43 @@ export const centauriApi = {
     return `${apiBase()}/centauri/events/${eventId}/thumbnail`;
   },
 
+  // Serves the archived `.gcode` (Phase-2.2 enrichment artefact) with a
+  // download-friendly filename. 404 for legacy events that never ran the
+  // enrichment, or whose archive was pruned.
+  gcodeUrl(eventId: number): string {
+    return `${apiBase()}/centauri/events/${eventId}/gcode`;
+  },
+
   async review(
     eventId: number,
     action: "confirm" | "dismiss" | "reserve",
-    opts: { modelId?: string; reason?: string } = {},
+    opts: { modelId?: string; reason?: string; spoolId?: number | null } = {},
   ): Promise<PrintReview> {
+    // Strip explicit nulls so the server-side `int | None = None` default
+    // applies cleanly — sending `"spoolId": null` works either way but
+    // shrinks the payload and keeps the network panel tidy.
+    const body: Record<string, unknown> = { action };
+    if (opts.modelId) body.modelId = opts.modelId;
+    if (opts.reason) body.reason = opts.reason;
+    if (opts.spoolId != null) body.spoolId = opts.spoolId;
     return jsonOrThrow(
       await fetch(`${apiBase()}/centauri/events/${eventId}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, ...opts }),
+        body: JSON.stringify(body),
       }),
+    );
+  },
+
+  // Map `modelId → autoMatchedAt (unix seconds)` for the Recent view.
+  // Empty object when nothing auto-matched in the window or when the
+  // backend has no centauri data yet. Best-effort: callers should treat
+  // any error as "no chips" rather than surfacing the failure.
+  async listAutoMatchedModels(hours = 168): Promise<Record<string, number>> {
+    const params = new URLSearchParams();
+    params.set("hours", String(hours));
+    return jsonOrThrow(
+      await fetch(`${apiBase()}/centauri/auto-matched-models?${params}`),
     );
   },
 

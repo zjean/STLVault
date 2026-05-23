@@ -38,6 +38,11 @@ export interface Print {
   syncedToSpoolman: boolean;
   createdAt: number;
   filaments: PrintFilament[];
+  // Provenance: "manual" for prints logged via the dialog, "centauri" for
+  // prints written by the Centauri ingest path. centauriEventId is the
+  // soft FK into centauri_print_event when source === "centauri".
+  source?: "manual" | "centauri";
+  centauriEventId?: number | null;
 }
 
 export interface SyncResult {

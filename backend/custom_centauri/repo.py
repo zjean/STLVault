@@ -510,6 +510,40 @@ def clear_review(db: DbFactory, event_id: int) -> bool:
         conn.close()
 
 
+def list_recently_auto_matched_models(
+    db: DbFactory, *, since_seconds: int
+) -> dict[str, int]:
+    """Map `modelId → most-recent reviewedAt (unix seconds)` for prints the
+    ingest path auto-confirmed inside the window.
+
+    Powers the Recent view's "auto-matched" chip — by returning a flat
+    map keyed by model id, the frontend can decorate model rows in O(1)
+    without per-row API calls.
+
+    Window: the same 7-day undo horizon as the inbox's auto-matched
+    panel, by default — the chip's user value is "this got logged
+    without me touching it, recently", which expires at the same time
+    the undo affordance does.
+    """
+    cutoff = int(time.time()) - max(1, int(since_seconds))
+    conn = db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT resultingModelId AS modelId, MAX(reviewedAt) AS lastAutoAt
+            FROM centauri_review
+            WHERE action = 'auto'
+              AND resultingModelId IS NOT NULL
+              AND reviewedAt >= ?
+            GROUP BY resultingModelId
+            """,
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row["modelId"]: int(row["lastAutoAt"]) for row in rows}
+
+
 def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
     """Flip reserves older than `max_age_days` to dismiss with audit reason.
 
@@ -542,7 +576,11 @@ def expire_old_reserves(db: DbFactory, max_age_days: int = 30) -> int:
 
 
 def create_print_log_from_event(
-    db: DbFactory, event: dict[str, Any], model_id: str
+    db: DbFactory,
+    event: dict[str, Any],
+    model_id: str,
+    *,
+    spool_id: int | None = None,
 ) -> str:
     """Write a `custom_prints` row for a confirmed event.
 
@@ -552,9 +590,12 @@ def create_print_log_from_event(
       'failed'    → 'failed'     (red X)
       'cancelled' → 'cancelled'  (grey slash — fallback branch in the UI
                                   IIFE, intentional)
-    Timing comes from the event; no filament rows yet (file-derived,
-    deferred to Phase 2 with .gcode.3mf parsing). The user can fill in
-    filament manually via the existing editor.
+    Timing comes from the event. Filament rows:
+      - spool_id=None   → no filament row (legacy / auto-confirm path)
+      - spool_id=<int>  → one custom_print_filaments row pinning this
+                          print to that spool, with estWeightG seeded
+                          from `event.estFilamentG` if known. The user
+                          can later resync to deduct against Spoolman.
     """
     print_id = str(uuid.uuid4())
     now = int(time.time())
@@ -587,6 +628,28 @@ def create_print_log_from_event(
                 event["id"],
             ),
         )
+        if spool_id is not None:
+            # Label / colour are unknown at this layer (we'd have to hit
+            # Spoolman from inside the repo, which crosses an architectural
+            # boundary). Leave them NULL; the row UI falls back to
+            # "Spool #N" until the next /api/spoolman/spools refresh
+            # backfills the snapshot, and the existing resync path will
+            # populate them on first deduction.
+            conn.execute(
+                """
+                INSERT INTO custom_print_filaments
+                    (id, printId, spoolId, estWeightG, usedWeightG,
+                     estLengthMm, usedLengthMm, spoolLabel, filamentColor,
+                     consumedAt)
+                VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    print_id,
+                    spool_id,
+                    event.get("estFilamentG"),
+                ),
+            )
         conn.commit()
     finally:
         conn.close()

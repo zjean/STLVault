@@ -191,6 +191,12 @@ class ReviewIn(BaseModel):
     action: str = Field(pattern=r"^(confirm|dismiss|reserve)$")
     modelId: str | None = None
     reason: str | None = None
+    # Optional spool attribution on the confirm path. When supplied, the
+    # write-through to custom_prints creates a filament row pinning this
+    # print to that spool so Spoolman sync can later deduct against it.
+    # Unset → behaviour as before (print logged with no filament rows;
+    # user can still edit via the existing print row UI).
+    spoolId: int | None = None
 
 
 # --- /status ----------------------------------------------------------------
@@ -354,6 +360,22 @@ def list_recent_auto(hours: int = 168) -> list[dict[str, Any]]:
     return events
 
 
+@router.get("/auto-matched-models")
+def list_auto_matched_models(hours: int = 168) -> dict[str, int]:
+    """Map `modelId → most-recent autoMatchedAt (unix seconds)` for the
+    Recent view's chip.
+
+    Empty when Spoolman/Centauri haven't auto-confirmed anything inside
+    the window — frontend treats absence as "no chip", failure as the
+    same (best-effort). Clamps the window to `[1h, 7d]` to match the
+    inbox panel's undo horizon (`UNDO_WINDOW_SECONDS`).
+    """
+    hrs = max(1, min(int(hours), 168))
+    return repo.list_recently_auto_matched_models(
+        _db, since_seconds=hrs * 3600
+    )
+
+
 @router.get("/events/{event_id}")
 def get_event(event_id: int) -> dict[str, Any]:
     ev = repo.get_event(_db, event_id)
@@ -391,6 +413,50 @@ async def event_thumbnail(event_id: int) -> StreamingResponse:
     if r.status_code != 200:
         raise HTTPException(status_code=404, detail="thumbnail not available")
     return StreamingResponse(iter([r.content]), media_type="image/png")
+
+
+@router.get("/events/{event_id}/gcode")
+def event_gcode(event_id: int):
+    """Serve the archived `.gcode` we pulled off the printer for this event.
+
+    Path is what the enrichment step wrote (Phase 2.2). The serving filename
+    uses `gcodeFilename` so a manual save preserves the original name from
+    the printer instead of our internal "<startedAt>_<task_prefix>.gcode"
+    archive leaf. 404 if enrichment never ran (legacy events) or the file
+    was pruned by the archive's keep-N / older-than-D policy.
+
+    Safety: the archived path is always written by `_archive_gcode` under
+    `${FILE_STORAGE}/centauri/<printer_id>/...`. We reject any value that
+    resolves outside the upload root so a poisoned DB column can't read
+    arbitrary files.
+    """
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    import os
+
+    ev = repo.get_event(_db, event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    archived = ev.get("archivedGcodePath")
+    if not archived:
+        raise HTTPException(status_code=404, detail="no archived gcode for this event")
+
+    upload_root = Path(os.getenv("FILE_STORAGE", "./app/uploads")).resolve()
+    try:
+        path = Path(archived).resolve()
+        path.relative_to(upload_root)
+    except (ValueError, OSError) as e:
+        log.warning("centauri gcode serve: rejected path %r (%s)", archived, e)
+        raise HTTPException(status_code=404, detail="gcode file not found") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="gcode file not found")
+
+    download_name = ev.get("gcodeFilename") or path.name
+    return FileResponse(
+        path,
+        media_type="text/plain; charset=utf-8",
+        filename=download_name,
+    )
 
 
 UNDO_WINDOW_SECONDS = 7 * 24 * 3600  # 7 days; matches the design's revisit horizon
@@ -466,7 +532,9 @@ def review_event(event_id: int, body: ReviewIn) -> dict[str, Any]:
             conn.close()
         if row is None:
             raise HTTPException(status_code=404, detail="model not found")
-        print_id = repo.create_print_log_from_event(_db, ev, body.modelId)
+        print_id = repo.create_print_log_from_event(
+            _db, ev, body.modelId, spool_id=body.spoolId
+        )
         review = repo.upsert_review(
             _db,
             event_id,
