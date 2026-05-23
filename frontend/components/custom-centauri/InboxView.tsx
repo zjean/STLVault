@@ -196,6 +196,34 @@ const InboxView: React.FC<InboxViewProps> = ({
     }
   };
 
+  const handleCreateFromPrint = async (eventId: number) => {
+    setBusy(eventId, true);
+    try {
+      const m = await centauriApi.createModelFromEvent(eventId);
+      // Show a small "created" affirmation by piggy-backing on the
+      // error banner channel with success styling would be nice; for
+      // now, surface the model name in a one-shot status string the
+      // user can dismiss by re-interacting.
+      setLoadError(null);
+      await refresh();
+      // Best-effort: log the new model id to the console so a power user
+      // can grep. No router navigation here — the user can find it in
+      // the Print Inbox folder via the sidebar.
+      // eslint-disable-next-line no-console
+      console.info(
+        `Centauri: created model ${m.id} (${m.name}) in Print Inbox`,
+      );
+    } catch (e) {
+      setLoadError(
+        e instanceof Error
+          ? e.message
+          : "Creating a model from this print failed",
+      );
+    } finally {
+      setBusy(eventId, false);
+    }
+  };
+
   const isEmpty = events !== null && events.length === 0;
 
   return (
@@ -281,6 +309,7 @@ const InboxView: React.FC<InboxViewProps> = ({
                   onDismiss={() => void handleDismiss(ev.id)}
                   onReserve={() => void handleReserve(ev.id)}
                   onAttach3mf={(file) => void handleAttach3mf(ev.id, file)}
+                  onCreateFromPrint={() => void handleCreateFromPrint(ev.id)}
                 />
               ))}
             </div>
@@ -343,6 +372,7 @@ const EventCard: React.FC<{
   onDismiss: () => void;
   onReserve: () => void;
   onAttach3mf: (file: File) => void;
+  onCreateFromPrint: () => void;
 }> = ({
   event,
   busy,
@@ -351,6 +381,7 @@ const EventCard: React.FC<{
   onDismiss,
   onReserve,
   onAttach3mf,
+  onCreateFromPrint,
 }) => {
   const [thumbErrored, setThumbErrored] = useState(false);
   const [isDragHover, setIsDragHover] = useState(false);
@@ -517,6 +548,17 @@ const EventCard: React.FC<{
             <Check size={13} />{" "}
             {candidates.length === 0 ? "Pick model…" : "Pick a different model…"}
           </button>
+          {has3mf && (
+            <button
+              type="button"
+              onClick={onCreateFromPrint}
+              disabled={busy}
+              title="Create a new STLVault model from this print's .gcode.3mf and log the print against it."
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-surface hover:bg-surface-2 text-[12.5px] text-fg-2 transition-colors disabled:opacity-50"
+            >
+              <FileBox size={13} /> Create model from this print
+            </button>
+          )}
           {!isReserved && (
             <button
               type="button"
