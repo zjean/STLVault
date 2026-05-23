@@ -100,6 +100,30 @@ const parseDurationInput = (raw: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+// applyParse helpers. "Don't clobber user input" rule for filling form
+// fields from a slicer-parse result.
+//
+// Empty string ("") is the signal that the user has not entered anything
+// — we substitute the parsed value (or leave the field empty if the
+// parser had nothing either). Any non-empty string the user has typed
+// wins, including the literal "0": a user who typed 0 grams meant 0, and
+// the slicer's prediction is not a more-authoritative answer.
+const preserveOrUse = (
+  userValue: string,
+  parsed: number | null | undefined,
+): string => {
+  if (userValue !== "") return userValue;
+  return parsed == null ? "" : String(parsed);
+};
+
+const preserveOrUseRounded = (
+  userValue: string,
+  parsed: number | null | undefined,
+): string => {
+  if (userValue !== "") return userValue;
+  return parsed == null ? "" : String(Math.round(parsed));
+};
+
 const LogPrintDialog: React.FC<Props> = ({
   open,
   mode,
@@ -130,41 +154,47 @@ const LogPrintDialog: React.FC<Props> = ({
   const submitLockRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstFieldRef = useRef<HTMLSelectElement>(null);
+  // Bumped every time the open-effect re-runs (dialog opens, mode flips,
+  // model changes, existingPrint changes). Each async path captures its
+  // seq at call-time; setState calls bail out if a newer call has since
+  // started. Without this, opening for model A, closing, opening for
+  // model B can land model A's slicer parse into model B's form.
+  // Also guards user-triggered refreshSpools / handleUploadSlicedFile so
+  // a click+close+reopen sequence can't leak across dialog instances.
+  const requestSeqRef = useRef(0);
 
-  // Apply slicer parse results to empty form fields (don't clobber user input).
+  // Apply slicer parse results to empty form fields. The "Used" trio only
+  // gets pre-filled outside of start-mode — start has nothing consumed
+  // yet, so seeding used* with the slicer's estimate would be a lie.
+  // See preserveOrUse/preserveOrUseRounded for the "don't clobber user
+  // input" rule (including a deliberate "0").
   const applyParse = (md: SliceParseResult, source: string) => {
     setParseResult(md);
     setParseSource(source);
-    setForm((f) => ({
-      ...f,
-      estWeightG:
-        f.estWeightG || md.estWeightG == null ? f.estWeightG : String(md.estWeightG),
-      estLengthMm:
-        f.estLengthMm || md.estLengthMm == null
-          ? f.estLengthMm
-          : String(Math.round(md.estLengthMm)),
-      estDurationMin:
-        f.estDurationMin || md.estDurationMin == null
-          ? f.estDurationMin
-          : String(md.estDurationMin),
-      usedWeightG:
-        mode !== "start" && !f.usedWeightG && md.estWeightG != null
-          ? String(md.estWeightG)
+    setForm((f) => {
+      const fillUsed = mode !== "start";
+      return {
+        ...f,
+        estWeightG: preserveOrUse(f.estWeightG, md.estWeightG),
+        estLengthMm: preserveOrUseRounded(f.estLengthMm, md.estLengthMm),
+        estDurationMin: preserveOrUse(f.estDurationMin, md.estDurationMin),
+        usedWeightG: fillUsed
+          ? preserveOrUse(f.usedWeightG, md.estWeightG)
           : f.usedWeightG,
-      usedLengthMm:
-        mode !== "start" && !f.usedLengthMm && md.estLengthMm != null
-          ? String(Math.round(md.estLengthMm))
+        usedLengthMm: fillUsed
+          ? preserveOrUseRounded(f.usedLengthMm, md.estLengthMm)
           : f.usedLengthMm,
-      wallClockMin:
-        mode !== "start" && !f.wallClockMin && md.estDurationMin != null
-          ? String(md.estDurationMin)
+        wallClockMin: fillUsed
+          ? preserveOrUse(f.wallClockMin, md.estDurationMin)
           : f.wallClockMin,
-    }));
+      };
+    });
   };
 
   // Reset + initial load when dialog opens.
   useEffect(() => {
     if (!open) return;
+    const mySeq = ++requestSeqRef.current;
     setSubmitError(null);
     setParseResult(null);
     setParseSource(null);
@@ -210,11 +240,17 @@ const LogPrintDialog: React.FC<Props> = ({
     setSpoolsError(null);
     spoolmanApi
       .listSpools()
-      .then((list) => setSpools(list))
-      .catch((e) =>
-        setSpoolsError(e instanceof Error ? e.message : "Failed to load spools"),
-      )
-      .finally(() => setSpoolsLoading(false));
+      .then((list) => {
+        if (mySeq !== requestSeqRef.current) return;
+        setSpools(list);
+      })
+      .catch((e) => {
+        if (mySeq !== requestSeqRef.current) return;
+        setSpoolsError(e instanceof Error ? e.message : "Failed to load spools");
+      })
+      .finally(() => {
+        if (mySeq === requestSeqRef.current) setSpoolsLoading(false);
+      });
 
     // Auto-parse only for non-complete modes; complete already has est values.
     if (mode !== "complete") {
@@ -222,6 +258,7 @@ const LogPrintDialog: React.FC<Props> = ({
       spoolmanApi
         .parseSliceForModel(model.id)
         .then((md) => {
+          if (mySeq !== requestSeqRef.current) return;
           if (!md.empty) applyParse(md, md.source);
           else {
             setParseResult(md);
@@ -231,21 +268,26 @@ const LogPrintDialog: React.FC<Props> = ({
         .catch(() => {
           /* parse failure is non-fatal — fields stay blank */
         })
-        .finally(() => setParsing(false));
+        .finally(() => {
+          if (mySeq === requestSeqRef.current) setParsing(false);
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, model.id, existingPrint?.id]);
 
   const refreshSpools = async () => {
+    const mySeq = requestSeqRef.current;
     setSpoolsLoading(true);
     try {
       const list = await spoolmanApi.listSpools();
+      if (mySeq !== requestSeqRef.current) return;
       setSpools(list);
       setSpoolsError(null);
     } catch (e) {
+      if (mySeq !== requestSeqRef.current) return;
       setSpoolsError(e instanceof Error ? e.message : "Failed to refresh");
     } finally {
-      setSpoolsLoading(false);
+      if (mySeq === requestSeqRef.current) setSpoolsLoading(false);
     }
   };
 
@@ -254,16 +296,21 @@ const LogPrintDialog: React.FC<Props> = ({
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const mySeq = requestSeqRef.current;
     setParsing(true);
     try {
       const md = await spoolmanApi.parseSliceUpload(file);
+      if (mySeq !== requestSeqRef.current) return;
       // applyParse is safe whether md.empty or not — when empty it just
       // updates the source label and leaves form fields untouched.
       applyParse(md, file.name);
     } catch (err) {
+      if (mySeq !== requestSeqRef.current) return;
       setSubmitError(err instanceof Error ? err.message : "Failed to parse file");
     } finally {
-      setParsing(false);
+      if (mySeq === requestSeqRef.current) setParsing(false);
+      // Always reset the input so the same file can be reselected, even
+      // if the result was discarded as stale.
       if (uploadInputRef.current) uploadInputRef.current.value = "";
     }
   };
