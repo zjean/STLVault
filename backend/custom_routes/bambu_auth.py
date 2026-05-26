@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from custom_auth import bambu_auth as ba
 from custom_auth import bambu_credentials
+from custom_db import with_pragmas
 
 
 log = logging.getLogger(__name__)

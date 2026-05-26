@@ -33,6 +33,7 @@ _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 
+from custom_db import with_pragmas
 from custom_spoolman import settings as ss
 from custom_spoolman.client import SpoolmanClient, SpoolmanError
 from custom_spoolman.slicer_parse import parse_file_bytes
