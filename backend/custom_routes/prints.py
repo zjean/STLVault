@@ -194,7 +194,6 @@ def _hydrate_filament_snapshots(
 def _attempt_consume(
     conn,
     *,
-    print_id: str,
     filaments: List[Dict[str, Any]],
     client: SpoolmanClient,
 ) -> Dict[str, Any]:
@@ -366,7 +365,6 @@ def create_for_model(model_id: str, body: CreatePrintBody) -> Dict[str, Any]:
                 persisted = prints_repo.get_print(conn, print_id)
                 sync_result = _attempt_consume(
                     conn,
-                    print_id=print_id,
                     filaments=persisted["filaments"],
                     client=client,
                 )
@@ -473,13 +471,16 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
                     used_length_mm=f.usedLengthMm,
                 )
             else:
-                prints_repo.update_filament_used_by_spool(
-                    conn,
-                    print_id,
-                    spool_id=f.spoolId,
-                    used_weight_g=f.usedWeightG,
-                    used_length_mm=f.usedLengthMm,
-                )
+                try:
+                    prints_repo.update_filament_used_by_spool(
+                        conn,
+                        print_id,
+                        spool_id=f.spoolId,
+                        used_weight_g=f.usedWeightG,
+                        used_length_mm=f.usedLengthMm,
+                    )
+                except prints_repo.AmbiguousFilamentError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
 
         # Update the parent row's status + timestamps.
         prints_repo.update_print_fields(
@@ -524,7 +525,6 @@ def complete_one(print_id: str, body: CompletePrintBody) -> Dict[str, Any]:
             else:
                 sync_result = _attempt_consume(
                     conn,
-                    print_id=print_id,
                     filaments=updated["filaments"],
                     client=client,
                 )
@@ -598,7 +598,6 @@ def resync_one(print_id: str) -> Dict[str, Any]:
         refreshed = prints_repo.get_print(conn, print_id)
         sync_result = _attempt_consume(
             conn,
-            print_id=print_id,
             filaments=refreshed["filaments"],
             client=client,
         )

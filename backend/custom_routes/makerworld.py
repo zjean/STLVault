@@ -12,6 +12,7 @@ from custom_auth.bambu_auth import (
 )
 from custom_importers._persist import persist_imported_model
 from custom_importers.makerworld import (
+    BambuApiError,
     LikedDesign,
     MakerworldImporter,
     MakerworldUrlError,
@@ -80,6 +81,9 @@ def list_liked(limit: int = 24, offset: int = 0):
                 status_code=401,
                 detail={"error": "bambu_auth_expired"},
             )
+        except BambuApiError as e:
+            log.warning("makerworld /liked: upstream %s (status=%s)", e.message, e.status)
+            raise HTTPException(status_code=502, detail=e.message)
         return {
             "hits": [_liked_to_dict(d) for d in designs],
             "total": total,
@@ -110,6 +114,9 @@ def get_options(body: OptionsBody):
         options = importer.getModelOptions(body.url)
     except MakerworldUrlError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except BambuApiError as e:
+        log.warning("makerworld /options: upstream %s (status=%s)", e.message, e.status)
+        raise HTTPException(status_code=502, detail=e.message)
     return options
 
 
@@ -131,6 +138,9 @@ def import_model_by_id(body: ImportBody):
                 status_code=401,
                 detail={"error": "bambu_auth_expired"},
             )
+        except BambuApiError as e:
+            log.warning("makerworld /importid: upstream %s (status=%s)", e.message, e.status)
+            raise HTTPException(status_code=502, detail=e.message)
 
         if _upload_dir is None:
             raise RuntimeError("custom_routes.makerworld: upload_dir not configured")
