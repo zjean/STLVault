@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from custom_db import with_pragmas
 from custom_prints import repo as prints_repo
 from custom_spoolman import settings as ss
 from custom_spoolman.client import SpoolmanClient, SpoolmanError
@@ -57,7 +58,7 @@ _db_conn_factory = None
 
 def set_db_conn_factory(factory) -> None:
     global _db_conn_factory
-    _db_conn_factory = factory
+    _db_conn_factory = with_pragmas(factory)
 
 
 def _get_db():

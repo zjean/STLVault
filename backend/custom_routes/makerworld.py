@@ -47,7 +47,7 @@ _upload_dir: Optional[Path] = None
 
 def configure(*, db_conn_factory, upload_dir: Path) -> None:
     global _db_conn_factory, _upload_dir
-    _db_conn_factory = db_conn_factory
+    _db_conn_factory = with_pragmas(db_conn_factory)
     _upload_dir = upload_dir
 
 

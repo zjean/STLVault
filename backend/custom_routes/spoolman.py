@@ -53,7 +53,7 @@ _upload_dir: Optional[Path] = None
 
 def set_db_conn_factory(factory) -> None:
     global _db_conn_factory
-    _db_conn_factory = factory
+    _db_conn_factory = with_pragmas(factory)
 
 
 def set_upload_dir(path: Path) -> None:

@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from custom_centauri import gcode3mf_meta, hash_backfill, matcher, repo
 from custom_centauri.client import CentauriClient
 from custom_centauri.discovery import discover
+from custom_db import with_pragmas
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ _subscribers: list[asyncio.Queue[dict[str, Any]]] = []
 
 def configure(*, db_conn_factory: Callable[..., Any], client: CentauriClient) -> None:
     global _db_conn_factory, _client
-    _db_conn_factory = db_conn_factory
+    _db_conn_factory = with_pragmas(db_conn_factory)
     _client = client
 
 
