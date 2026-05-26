@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -18,6 +18,7 @@ import type { STLModel } from "../../types";
 import { printsApi, type Print, type SyncResult } from "../../services/custom-prints";
 import {
   spoolmanApi,
+  spoolmanWebUrl,
   type SpoolmanSettings,
 } from "../../services/custom-spoolman";
 import { centauriApi } from "../../services/custom-centauri";
@@ -70,7 +71,12 @@ const ModelPrintsSection: React.FC<Props> = ({ model }) => {
   // window.confirm doesn't let us include a hyperlink.
   const [deleteTarget, setDeleteTarget] = useState<Print | null>(null);
 
+  // Request-seq guard: switching models in DetailPanel mid-fetch must
+  // not land the old model's prints into the new model's panel.
+  const requestSeqRef = useRef(0);
+
   const loadAll = useCallback(async () => {
+    const mySeq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -78,12 +84,14 @@ const ModelPrintsSection: React.FC<Props> = ({ model }) => {
         spoolmanApi.getSettings(),
         printsApi.listForModel(model.id),
       ]);
+      if (mySeq !== requestSeqRef.current) return;
       setSettings(s);
       setPrints(list);
     } catch (e) {
+      if (mySeq !== requestSeqRef.current) return;
       setError(e instanceof Error ? e.message : "Failed to load prints");
     } finally {
-      setLoading(false);
+      if (mySeq === requestSeqRef.current) setLoading(false);
     }
   }, [model.id]);
 
@@ -237,7 +245,7 @@ const ModelPrintsSection: React.FC<Props> = ({ model }) => {
           <span className="flex-1">{toast.text}</span>
           {settings?.baseUrl && toast.spoolId != null && (
             <a
-              href={`${settings.baseUrl.replace(/\/api\/v1\/?$/, "")}/spool/show/${toast.spoolId}`}
+              href={`${spoolmanWebUrl(settings.baseUrl)}/spool/show/${toast.spoolId}`}
               target="_blank"
               rel="noreferrer noopener"
               className="inline-flex items-center gap-1 underline-offset-2 hover:underline"

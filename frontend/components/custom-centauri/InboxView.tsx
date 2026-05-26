@@ -72,7 +72,10 @@ const InboxView: React.FC<InboxViewProps> = ({
   onLibraryDirty,
 }) => {
   const [events, setEvents] = useState<PrintEventWithCandidates[] | null>(null);
-  const [autoMatched, setAutoMatched] = useState<PrintEventWithCandidates[]>([]);
+  // Nullable like `events` so the empty state and the loading state are
+  // distinguishable for both lists. The Promise.all in refresh() resolves
+  // both atomically, so the symmetry holds in practice.
+  const [autoMatched, setAutoMatched] = useState<PrintEventWithCandidates[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pickerOpenFor, setPickerOpenFor] = useState<PrintEventWithCandidates | null>(null);
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
@@ -233,7 +236,8 @@ const InboxView: React.FC<InboxViewProps> = ({
     }
   };
 
-  const isEmpty = events !== null && events.length === 0;
+  const isLoaded = events !== null && autoMatched !== null;
+  const isEmpty = isLoaded && events.length === 0;
 
   return (
     <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-bg">
@@ -324,7 +328,7 @@ const InboxView: React.FC<InboxViewProps> = ({
             </div>
           )}
 
-          {autoMatched.length > 0 && (
+          {autoMatched !== null && autoMatched.length > 0 && (
             <div className="mt-8">
               <h3 className="text-[14px] font-semibold text-fg-2 m-0 flex items-center gap-2">
                 <Zap size={13} className="text-accent" />
