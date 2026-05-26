@@ -10,6 +10,7 @@ from custom_auth.bambu_auth import (
     BambuAuthExpiredError,
     BambuAuthNotConfiguredError,
 )
+from custom_db import with_pragmas
 from custom_importers._persist import persist_imported_model
 from custom_importers.makerworld import (
     BambuApiError,
